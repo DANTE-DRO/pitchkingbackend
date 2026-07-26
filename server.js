@@ -46,6 +46,7 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use("/api", require("./routes/accounts"));
 app.use("/api", require("./routes/raffle"));
 app.use("/api", require("./routes/bets"));
+app.use("/api", require("./routes/challenges"));
 app.use("/api", require("./routes/admin"));
 
 app.get("/api/health", (req, res) =>
