@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PitchKing Admin — Accounts</title>
+<link rel="stylesheet" href="css/admin.css" />
+</head>
+<body>
+
+<header class="header">
+  <a class="brand" href="accounts.html">PITCH<span class="accent">KING</span> ADMIN</a>
+  <div class="nav">
+    <a href="accounts.html" class="active">Raffle Accounts</a>
+    <a href="bets.html">Challenges</a>
+    <a href="settings.html">Settings</a>
+    <span id="adminUsername" style="color:var(--cyan);font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;"></span>
+    <button class="logout" id="logoutBtn">Log out</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1 class="page-title">▸ Raffle Accounts</h1>
+  <div id="alertBox"></div>
+
+  <div class="panel">
+    <h2>Add a new account</h2>
+    <div class="form-row">
+      <label for="newName">Account name</label>
+      <input id="newName" type="text" placeholder="e.g. Elite Squad Account #1" />
+    </div>
+    <div class="form-row">
+      <label for="newWorth">Worth (KSh)</label>
+      <input id="newWorth" type="number" placeholder="e.g. 30000" />
+    </div>
+    <div class="form-row">
+      <label for="newPrice">Ticket price (KSh)</label>
+      <input id="newPrice" type="number" placeholder="e.g. 180" />
+    </div>
+    <div class="form-row">
+      <label for="newFeature">Features (add one at a time)</label>
+      <div style="display:flex; gap:8px;">
+        <input id="newFeature" type="text" placeholder="e.g. 500+ matches won" style="flex:1" />
+        <button class="btn secondary small" id="addFeatureBtn" type="button">Add</button>
+      </div>
+      <div class="feature-tags" id="newFeatureTags"></div>
+    </div>
+    <button class="btn" id="createAccountBtn">Create account</button>
+  </div>
+
+  <div class="panel">
+    <h2>Existing accounts</h2>
+    <div id="accountsList"><p class="help">Loading…</p></div>
+  </div>
+</main>
+
+<script src="js/admin.js"></script>
+<script src="js/accounts.js"></script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PitchKing Admin — Login</title>
+<link rel="stylesheet" href="css/admin.css" />
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-card">
+    <h1>PITCH<span style="color:#00e5ff">KING</span></h1>
+    <div class="subtitle">▸ Admin Console ◂</div>
+    <div id="alertBox"></div>
+    <div class="form-row">
+      <label for="username">Username</label>
+      <input id="username" type="text" autocomplete="username" value="admin" />
+    </div>
+    <div class="form-row">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" />
+    </div>
+    <button class="btn" style="width:100%;padding:12px 16px;font-size:13px" id="loginBtn">LOG IN</button>
+    <p class="help" style="margin-top:16px;text-align:center;">Access to the PitchKing control panel.</p>
+  </div>
+</div>
+
+<script src="js/admin.js"></script>
+<script>
+document.getElementById("loginBtn").addEventListener("click", doLogin);
+document.getElementById("password").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") doLogin();
+});
+async function doLogin() {
+  const username = document.getElementById("username").value.trim();
+  const password = document.getElementById("password").value;
+  const alertBox = document.getElementById("alertBox");
+  try {
+    const res = await fetch(`${API_BASE}/admin/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Login failed");
+    setToken(data.token, data.username);
+    window.location.href = "accounts.html";
+  } catch (err) {
+    alertBox.innerHTML = `<div class="alert error">${err.message}</div>`;
+  }
+}
+</script>
+</body>
+</html>

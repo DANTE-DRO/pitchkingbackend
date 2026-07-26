@@ -1,15 +1,16 @@
+# Render.com blueprint. Optional — you can also just create a Web Service
+# through the Render dashboard using the settings shown in DEPLOY.md.
 services:
   - type: web
-    name: devablueforex-backend
+    name: pitchkingbackend
     env: node
     plan: free
-    region: oregon
     buildCommand: npm install
-    startCommand: npm start
+    startCommand: node server.js
     envVars:
-      - key: JWT_SECRET
-        generateValue: true
+      - key: NODE_VERSION
+        value: 20.11.1
+      - key: ADMIN_USERNAME
+        value: admin
       - key: ADMIN_PASSWORD
-        value: 11devablue72
-      - key: NODE_ENV
-        value: production
+        value: 11hezron72

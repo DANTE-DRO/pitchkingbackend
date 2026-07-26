@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PitchKing Admin — Challenges</title>
+<link rel="stylesheet" href="css/admin.css" />
+</head>
+<body>
+
+<header class="header">
+  <a class="brand" href="accounts.html">PITCH<span class="accent">KING</span> ADMIN</a>
+  <div class="nav">
+    <a href="accounts.html">Raffle Accounts</a>
+    <a href="bets.html" class="active">Challenges</a>
+    <a href="settings.html">Settings</a>
+    <span id="adminUsername" style="color:var(--cyan);font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;"></span>
+    <button class="logout" id="logoutBtn">Log out</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1 class="page-title">▸ Head-to-Head Challenges</h1>
+  <div id="alertBox"></div>
+  <p class="help" style="margin-bottom:20px;">"Awaiting authorisation" challenges have an agreed winner and are ready for you to send payment manually, then mark as paid. "Disputed" challenges need you to pick a winner yourself.</p>
+  <div id="betsList"><p class="help">Loading…</p></div>
+</main>
+
+<script src="js/admin.js"></script>
+<script src="js/bets.js"></script>
+</body>
+</html>

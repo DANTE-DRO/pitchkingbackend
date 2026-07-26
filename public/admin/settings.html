@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PitchKing Admin — Settings</title>
+<link rel="stylesheet" href="css/admin.css" />
+</head>
+<body>
+
+<header class="header">
+  <a class="brand" href="accounts.html">PITCH<span class="accent">KING</span> ADMIN</a>
+  <div class="nav">
+    <a href="accounts.html">Raffle Accounts</a>
+    <a href="bets.html">Challenges</a>
+    <a href="settings.html" class="active">Settings</a>
+    <span id="adminUsername" style="color:var(--cyan);font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;"></span>
+    <button class="logout" id="logoutBtn">Log out</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1 class="page-title">▸ Settings</h1>
+  <div id="alertBox"></div>
+
+  <div class="panel">
+    <h2>Head-to-head challenge payout split</h2>
+    <p class="help">This controls how the pot from every challenge is split once a winner is confirmed. The two numbers must add up to 100.</p>
+    <div class="form-row">
+      <label for="winnerPercent">Winner's share (%)</label>
+      <input id="winnerPercent" type="number" min="1" max="99" />
+    </div>
+    <div class="form-row">
+      <label for="platformPercent">Platform's share (%)</label>
+      <input id="platformPercent" type="number" min="1" max="99" />
+    </div>
+    <button class="btn" id="saveSettingsBtn">Save</button>
+  </div>
+</main>
+
+<script src="js/admin.js"></script>
+<script>
+requireLogin();
+initHeader();
+const alertBox = document.getElementById("alertBox");
+function showAlert(msg, type = "info") {
+  alertBox.innerHTML = `<div class="alert ${type}">${msg}</div>`;
+  setTimeout(() => (alertBox.innerHTML = ""), 5000);
+}
+
+async function loadSettings() {
+  try {
+    const s = await adminGet("/admin/settings");
+    document.getElementById("winnerPercent").value = s.winnerPercent;
+    document.getElementById("platformPercent").value = s.platformPercent;
+  } catch (err) {
+    showAlert(err.message, "error");
+  }
+}
+
+document.getElementById("saveSettingsBtn").addEventListener("click", async () => {
+  const winnerPercent = Number(document.getElementById("winnerPercent").value);
+  const platformPercent = Number(document.getElementById("platformPercent").value);
+  try {
+    await adminPost("/admin/settings", { winnerPercent, platformPercent });
+    showAlert("Settings saved.", "success");
+  } catch (err) {
+    showAlert(err.message, "error");
+  }
+});
+
+loadSettings();
+</script>
+</body>
+</html>
