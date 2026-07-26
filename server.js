@@ -15,7 +15,6 @@ const fs = require("fs");
 
 const store = require("./lib/store");
 const { ensureDefaultAdmin } = require("./lib/auth");
-const { handleCallback } = require("./lib/payment");
 
 // Make absolutely sure required folders exist BEFORE anything else runs.
 // This is the root cause of the "Cannot find module './data/xxx'" error
@@ -43,24 +42,16 @@ app.use(express.json({ limit: "2mb" }));
 // Uploaded raffle-account images
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-// KCB Buni STK Push callback — KCB posts the final payment result here.
-// This must respond 200 quickly; the actual result is routed back to
-// whichever request is waiting on it inside lib/payment.js.
-app.post("/callback", (req, res) => {
-  try {
-    handleCallback(req.body);
-  } catch (err) {
-    console.error("[KCB] Error handling callback:", err);
-  }
-  res.status(200).json({ ResultCode: 0, ResultDesc: "Callback received successfully" });
-});
-
 // API routes
 app.use("/api", require("./routes/accounts"));
 app.use("/api", require("./routes/raffle"));
 app.use("/api", require("./routes/bets"));
 app.use("/api", require("./routes/challenges"));
 app.use("/api", require("./routes/admin"));
+
+// KCB Buni callback + polling + smoke test.
+// Mounted at the root so KCB_CALLBACK_URL = https://<host>/callback works directly.
+app.use("/", require("./routes/kcb"));
 
 app.get("/api/health", (req, res) =>
   res.json({ ok: true, name: "PitchKing API", time: new Date().toISOString() })
