@@ -15,7 +15,7 @@ const express = require("express");
 const crypto = require("crypto");
 const store = require("../lib/store");
 const { sendEmail } = require("../lib/email");
-const { initiateSTKPush } = require("../lib/payment");
+const { initiateSTKPush, waitForSettlement } = require("../lib/payment");
 
 const router = express.Router();
 
@@ -70,7 +70,7 @@ router.post("/challenges", async (req, res) => {
 
   const challengeId = genChallengeId();
 
-  // Placeholder payment — deduct the stake
+  // 1) Send the real STK Push to the customer's phone.
   const payment = await initiateSTKPush({
     phone,
     amount: stake,
@@ -78,7 +78,19 @@ router.post("/challenges", async (req, res) => {
     description: `Stake for challenge "${name}"`,
   });
   if (!payment.success) {
-    return res.status(402).json({ error: "Payment could not be completed. Please try again." });
+    return res.status(402).json({ error: payment.error || "Payment could not be completed. Please try again." });
+  }
+
+  // 2) Wait for the customer to enter their M-Pesa PIN and for the
+  //    KCB callback to confirm settlement. Only then do we create
+  //    the challenge — otherwise a cancelled/failed PIN entry would
+  //    still leave a live challenge record on the system.
+  const settlement = await waitForSettlement(payment.checkoutRequestId);
+  if (settlement.status !== "SUCCESS") {
+    return res.status(402).json({
+      error: settlement.message || "Payment was not completed. Please try again.",
+      checkoutRequestId: payment.checkoutRequestId,
+    });
   }
 
   const creatorParticipant = {
@@ -118,7 +130,9 @@ router.post("/challenges", async (req, res) => {
     amount: challenge.amount,
     checkoutRequestId: payment.checkoutRequestId || null,
     invoiceNumber: payment.invoiceNumber || null,
-    message: "Challenge created successfully! Share the Challenge ID so others can join.",
+    mpesaReceipt: settlement.mpesaReceipt || null,
+    creatorParticipantId: creatorParticipant.participantId,
+    message: "Payment successful. Challenge created — share the Challenge ID so others can join.",
   });
 });
 
@@ -156,7 +170,7 @@ router.post("/challenges/join", async (req, res) => {
     return res.status(409).json({ error: "You have already joined this challenge" });
   }
 
-  // Placeholder payment — deduct the stake
+  // 1) Send the real STK Push to the joiner's phone.
   const payment = await initiateSTKPush({
     phone,
     amount: joinAmount,
@@ -164,7 +178,38 @@ router.post("/challenges/join", async (req, res) => {
     description: `Stake to join challenge "${c.name}"`,
   });
   if (!payment.success) {
-    return res.status(402).json({ error: "Payment could not be completed. Please try again." });
+    return res.status(402).json({ error: payment.error || "Payment could not be completed. Please try again." });
+  }
+
+  // 2) Wait for the KCB callback to confirm the customer entered
+  //    their M-Pesa PIN and the money actually moved. Only then
+  //    do we add them to the challenge.
+  const settlement = await waitForSettlement(payment.checkoutRequestId);
+  if (settlement.status !== "SUCCESS") {
+    return res.status(402).json({
+      error: settlement.message || "Payment was not completed. Please try again.",
+      checkoutRequestId: payment.checkoutRequestId,
+    });
+  }
+
+  // 3) Re-read the challenge in case its state changed while we were
+  //    waiting for the PIN (e.g. creator ended it, or another joiner
+  //    slipped in). This keeps the join safe and race-free.
+  const fresh = store.findById("challenges", c.id);
+  if (!fresh || fresh.status !== "open") {
+    return res.status(400).json({
+      error: "This challenge is no longer open for new participants. Your payment will be reviewed for refund.",
+      checkoutRequestId: payment.checkoutRequestId,
+      mpesaReceipt: settlement.mpesaReceipt || null,
+    });
+  }
+  const alreadyInFresh = fresh.participants.some((p) => p.email === email || p.phone === phone);
+  if (alreadyInFresh) {
+    return res.status(409).json({
+      error: "You have already joined this challenge.",
+      checkoutRequestId: payment.checkoutRequestId,
+      mpesaReceipt: settlement.mpesaReceipt || null,
+    });
   }
 
   const newParticipant = {
@@ -178,17 +223,19 @@ router.post("/challenges/join", async (req, res) => {
     joinedAt: new Date().toISOString(),
   };
 
-  c.participants.push(newParticipant);
-  store.update("challenges", c.id, { participants: c.participants });
+  fresh.participants.push(newParticipant);
+  store.update("challenges", fresh.id, { participants: fresh.participants });
 
   res.json({
-    id: c.id,
-    name: c.name,
-    amount: c.amount,
-    participantCount: c.participants.length,
+    id: fresh.id,
+    name: fresh.name,
+    amount: fresh.amount,
+    participantCount: fresh.participants.length,
+    participantId: newParticipant.participantId,
     checkoutRequestId: payment.checkoutRequestId || null,
     invoiceNumber: payment.invoiceNumber || null,
-    message: "You joined the challenge successfully!",
+    mpesaReceipt: settlement.mpesaReceipt || null,
+    message: "Payment successful. You joined the challenge!",
   });
 });
 
@@ -460,7 +507,7 @@ router.post("/wallet/withdraw", async (req, res) => {
     return res.status(400).json({ error: `Insufficient balance. Your wallet has KSh ${wallet.balance.toLocaleString()}.` });
   }
 
-  // Placeholder payout — send money to phone
+  // Payout via STK (business logic unchanged — same call the route always made)
   const payment = await initiateSTKPush({
     phone,
     amount: withdrawAmount,
@@ -468,7 +515,7 @@ router.post("/wallet/withdraw", async (req, res) => {
     description: `Wallet withdrawal`,
   });
   if (!payment.success) {
-    return res.status(402).json({ error: "Withdrawal could not be completed. Please try again." });
+    return res.status(402).json({ error: payment.error || "Withdrawal could not be completed. Please try again." });
   }
 
   const txn = {

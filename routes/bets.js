@@ -2,7 +2,7 @@ const express = require("express");
 const crypto = require("crypto");
 const store = require("../lib/store");
 const { requireAdmin } = require("../lib/auth");
-const { initiateSTKPush } = require("../lib/payment");
+const { initiateSTKPush, waitForSettlement } = require("../lib/payment");
 
 const router = express.Router();
 
@@ -40,7 +40,7 @@ router.post("/bets", async (req, res) => {
     return res.status(409).json({ error: "That playing code is already in use. Please choose another." });
   }
 
-  // Placeholder deposit — see backend/lib/payment.js
+  // 1) Real STK Push to the creator's phone.
   const payment = await initiateSTKPush({
     phone,
     amount: stake,
@@ -48,7 +48,17 @@ router.post("/bets", async (req, res) => {
     description: `Challenge stake for playing code ${code}`,
   });
   if (!payment.success) {
-    return res.status(402).json({ error: "Deposit could not be completed. Please try again." });
+    return res.status(402).json({ error: payment.error || "Deposit could not be completed. Please try again." });
+  }
+
+  // 2) Wait for the KCB callback to confirm the customer entered
+  //    their M-Pesa PIN. Only persist the bet after settlement.
+  const settlement = await waitForSettlement(payment.checkoutRequestId);
+  if (settlement.status !== "SUCCESS") {
+    return res.status(402).json({
+      error: settlement.message || "Payment was not completed. Please try again.",
+      checkoutRequestId: payment.checkoutRequestId,
+    });
   }
 
   const bet = {
@@ -93,7 +103,7 @@ router.post("/bets/:id/join", async (req, res) => {
     });
   }
 
-  // Placeholder deposit — see backend/lib/payment.js
+  // 1) Real STK Push to the opponent's phone.
   const payment = await initiateSTKPush({
     phone,
     amount: bet.amount,
@@ -101,10 +111,29 @@ router.post("/bets/:id/join", async (req, res) => {
     description: `Challenge stake for playing code ${bet.playingCode}`,
   });
   if (!payment.success) {
-    return res.status(402).json({ error: "Deposit could not be completed. Please try again." });
+    return res.status(402).json({ error: payment.error || "Deposit could not be completed. Please try again." });
   }
 
-  const updated = store.update("bets", bet.id, {
+  // 2) Wait for real settlement before marking the bet active.
+  const settlement = await waitForSettlement(payment.checkoutRequestId);
+  if (settlement.status !== "SUCCESS") {
+    return res.status(402).json({
+      error: settlement.message || "Payment was not completed. Please try again.",
+      checkoutRequestId: payment.checkoutRequestId,
+    });
+  }
+
+  // 3) Re-read the bet in case it was joined or cancelled meanwhile.
+  const freshBet = store.findById("bets", bet.id);
+  if (!freshBet || freshBet.status !== "awaiting_opponent") {
+    return res.status(400).json({
+      error: "This challenge is no longer open. Please contact support for a refund.",
+      checkoutRequestId: payment.checkoutRequestId,
+      mpesaReceipt: settlement.mpesaReceipt || null,
+    });
+  }
+
+  const updated = store.update("bets", freshBet.id, {
     status: "active",
     opponent: { phone, email, agreed: true, depositPaid: true, resultClaim: null },
   });
