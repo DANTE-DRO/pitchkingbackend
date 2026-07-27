@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PitchKing Admin — Dashboard</title>
+<link rel="stylesheet" href="css/admin.css" />
+<style>
+  .dash-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+    gap:18px;
+    margin-top:18px;
+  }
+  .dash-card{
+    background:linear-gradient(160deg, rgba(17,31,63,.9), rgba(10,20,40,.85));
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:22px 22px 20px;
+    position:relative;
+    overflow:hidden;
+  }
+  .dash-card::before{
+    content:""; position:absolute; top:0; left:0; right:0; height:3px;
+    background:linear-gradient(90deg, transparent, var(--cyan), transparent);
+  }
+  .dash-card.gold::before{ background:linear-gradient(90deg, transparent, #ffd400, transparent); }
+  .dash-card.green::before{ background:linear-gradient(90deg, transparent, #00ff88, transparent); }
+  .dash-card.grand::before{ background:linear-gradient(90deg, transparent, #ffd400, #00e5ff, #ffd400, transparent); height:4px; }
+  .dash-label{
+    font-size:11px; font-weight:700; letter-spacing:1.5px;
+    text-transform:uppercase; color:var(--cyan);
+  }
+  .dash-card.gold .dash-label{ color:#ffd400; }
+  .dash-card.green .dash-label{ color:#00ff88; }
+  .dash-amount{
+    font-family:"Orbitron","Segoe UI",sans-serif;
+    font-size:30px; font-weight:900; color:#fff;
+    margin-top:10px;
+    text-shadow:0 0 12px rgba(0,229,255,.3);
+    word-break:break-all;
+  }
+  .dash-card.gold .dash-amount{ text-shadow:0 0 12px rgba(255,212,0,.35); }
+  .dash-card.green .dash-amount{ text-shadow:0 0 12px rgba(0,255,136,.35); }
+  .dash-sub{
+    margin-top:10px; font-size:12px; color:var(--ink-soft);
+    display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;
+  }
+  .dash-sub strong{ color:#fff; }
+  .refresh-row{
+    display:flex; justify-content:space-between; align-items:center;
+    flex-wrap:wrap; gap:10px; margin-bottom:8px;
+  }
+  .refresh-row .help{ margin:0; }
+  @media (max-width:520px){
+    .dash-amount{ font-size:24px; }
+    .dash-card{ padding:18px 18px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <a class="brand" href="dashboard.html">PITCH<span class="accent">KING</span> ADMIN</a>
+  <div class="nav">
+    <a href="dashboard.html" class="active">Dashboard</a>
+    <a href="accounts.html">Raffle Accounts</a>
+    <a href="bets.html">Challenges</a>
+    <a href="settings.html">Settings</a>
+    <span id="adminUsername" style="color:var(--cyan);font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;"></span>
+    <button class="logout" id="logoutBtn">Log out</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1 class="page-title">▸ Dashboard — Amounts Received</h1>
+  <div id="alertBox"></div>
+
+  <div class="refresh-row">
+    <p class="help">Totals refresh automatically every 15 seconds. Every successful M-Pesa STK Push received from customers is counted here.</p>
+    <button class="btn small" id="refreshBtn">↻ Refresh now</button>
+  </div>
+
+  <div class="dash-grid" id="dashGrid">
+    <p class="help">Loading totals…</p>
+  </div>
+</main>
+
+<script src="js/admin.js"></script>
+<script>
+requireLogin();
+initHeader();
+
+async function loadDashboard(){
+  const grid = document.getElementById("dashGrid");
+  try{
+    const d = await adminGet("/admin/dashboard");
+    grid.innerHTML = `
+      <div class="dash-card">
+        <div class="dash-label">▸ Total from Raffles</div>
+        <div class="dash-amount">${moneyKsh(d.raffles.total)}</div>
+        <div class="dash-sub">
+          <span>Tickets sold: <strong>${d.raffles.ticketsSold}</strong></span>
+          <span>Accounts: <strong>${d.raffles.accountsCount}</strong></span>
+        </div>
+      </div>
+
+      <div class="dash-card gold">
+        <div class="dash-label">▸ Total from Head-to-Head</div>
+        <div class="dash-amount">${moneyKsh(d.headToHead.total)}</div>
+        <div class="dash-sub">
+          <span>Challenges: <strong>${d.headToHead.challengesCount}</strong></span>
+          <span>Legacy bets: <strong>${d.headToHead.legacyBetsCount}</strong></span>
+        </div>
+      </div>
+
+      <div class="dash-card green">
+        <div class="dash-label">▸ Platform Fee Earned (20%)</div>
+        <div class="dash-amount">${moneyKsh(d.platformEarned)}</div>
+        <div class="dash-sub">
+          <span>From completed challenges</span>
+        </div>
+      </div>
+
+      <div class="dash-card grand">
+        <div class="dash-label">▸ Grand Total Received</div>
+        <div class="dash-amount">${moneyKsh(d.grandTotal)}</div>
+        <div class="dash-sub">
+          <span>Raffles + Head-to-Head combined</span>
+        </div>
+      </div>
+    `;
+  }catch(err){
+    grid.innerHTML = `<div class="alert error">${err.message}</div>`;
+  }
+}
+
+document.getElementById("refreshBtn").addEventListener("click", loadDashboard);
+loadDashboard();
+setInterval(loadDashboard, 15000);
+</script>
+</body>
+</html>

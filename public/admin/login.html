@@ -44,7 +44,7 @@ async function doLogin() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Login failed");
     setToken(data.token, data.username);
-    window.location.href = "accounts.html";
+    window.location.href = "dashboard.html";
   } catch (err) {
     alertBox.innerHTML = `<div class="alert error">${err.message}</div>`;
   }

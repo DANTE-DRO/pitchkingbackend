@@ -116,6 +116,8 @@ router.post("/challenges", async (req, res) => {
     id: challenge.id,
     name: challenge.name,
     amount: challenge.amount,
+    checkoutRequestId: payment.checkoutRequestId || null,
+    invoiceNumber: payment.invoiceNumber || null,
     message: "Challenge created successfully! Share the Challenge ID so others can join.",
   });
 });
@@ -184,6 +186,8 @@ router.post("/challenges/join", async (req, res) => {
     name: c.name,
     amount: c.amount,
     participantCount: c.participants.length,
+    checkoutRequestId: payment.checkoutRequestId || null,
+    invoiceNumber: payment.invoiceNumber || null,
     message: "You joined the challenge successfully!",
   });
 });
@@ -489,6 +493,8 @@ router.post("/wallet/withdraw", async (req, res) => {
     balance: wallet.balance,
     withdrew: withdrawAmount,
     transactionId: payment.transactionId,
+    checkoutRequestId: payment.checkoutRequestId || null,
+    invoiceNumber: payment.invoiceNumber || null,
     message: `Withdrawal of KSh ${withdrawAmount.toLocaleString()} successful. Remaining balance: KSh ${wallet.balance.toLocaleString()}.`,
   });
 });

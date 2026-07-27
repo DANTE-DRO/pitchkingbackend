@@ -91,6 +91,9 @@ router.post("/raffle/buy", async (req, res) => {
     ticketNumbers,
     totalCost,
     transactionId: payment.transactionId,
+    checkoutRequestId: payment.checkoutRequestId || null,
+    invoiceNumber: payment.invoiceNumber || null,
+    message: payment.message || "Waiting for payment confirmation…",
   });
 });
 
