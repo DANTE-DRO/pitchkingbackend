@@ -35,7 +35,19 @@
       <label for="platformPercent">Platform's share (%)</label>
       <input id="platformPercent" type="number" min="1" max="99" />
     </div>
-    <button class="btn" id="saveSettingsBtn">Save</button>
+    <button class="btn" id="saveSettingsBtn">Save payout split</button>
+  </div>
+
+  <div class="panel">
+    <h2>Raffle countdown</h2>
+    <p class="help">
+      Default countdown duration (in days) for every new raffle account. The public site shows this countdown on each raffle card so buyers know how long is left. You can override this on a per-account basis from the Raffle Accounts page.
+    </p>
+    <div class="form-row" style="max-width:280px;">
+      <label for="raffleCountdownDays">Default countdown length (days)</label>
+      <input id="raffleCountdownDays" type="number" min="1" max="365" placeholder="e.g. 7" />
+    </div>
+    <button class="btn" id="saveCountdownBtn">Save countdown default</button>
   </div>
 </main>
 
@@ -54,6 +66,7 @@ async function loadSettings() {
     const s = await adminGet("/admin/settings");
     document.getElementById("winnerPercent").value = s.winnerPercent;
     document.getElementById("platformPercent").value = s.platformPercent;
+    document.getElementById("raffleCountdownDays").value = s.raffleCountdownDays || 7;
   } catch (err) {
     showAlert(err.message, "error");
   }
@@ -64,7 +77,23 @@ document.getElementById("saveSettingsBtn").addEventListener("click", async () =>
   const platformPercent = Number(document.getElementById("platformPercent").value);
   try {
     await adminPost("/admin/settings", { winnerPercent, platformPercent });
-    showAlert("Settings saved.", "success");
+    showAlert("Payout split saved.", "success");
+  } catch (err) {
+    showAlert(err.message, "error");
+  }
+});
+
+document.getElementById("saveCountdownBtn").addEventListener("click", async () => {
+  const winnerPercent = Number(document.getElementById("winnerPercent").value);
+  const platformPercent = Number(document.getElementById("platformPercent").value);
+  const raffleCountdownDays = Number(document.getElementById("raffleCountdownDays").value);
+  if (!(raffleCountdownDays > 0) || raffleCountdownDays > 365) {
+    showAlert("Countdown must be a number between 1 and 365.", "error");
+    return;
+  }
+  try {
+    await adminPost("/admin/settings", { winnerPercent, platformPercent, raffleCountdownDays });
+    showAlert(`Raffle countdown default saved (${raffleCountdownDays} days).`, "success");
   } catch (err) {
     showAlert(err.message, "error");
   }

@@ -20,7 +20,24 @@ const upload = multer({
 
 // ---------- PUBLIC ----------
 
+// Compute the current countdown end timestamp for an account.
+// Priority:
+//   1) account.countdownEndsAt (explicit per-account override set from admin panel)
+//   2) account.createdAt + settings.raffleCountdownDays * 1 day
+//   3) fallback: now + 7 days
+function getCountdownEndsAt(a) {
+  if (a.countdownEndsAt) return a.countdownEndsAt;
+  const rows = store.readAll("settings");
+  const days = Number(rows[0] && rows[0].raffleCountdownDays) > 0
+    ? Number(rows[0].raffleCountdownDays)
+    : 7;
+  const base = a.createdAt ? new Date(a.createdAt).getTime() : Date.now();
+  return new Date(base + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
 // List all raffle accounts customers can currently buy tickets for.
+// NOTE: ticketsSold is intentionally NOT exposed on the public feed —
+// the number of tickets already sold must stay private on the frontend.
 router.get("/accounts", (req, res) => {
   const accounts = store.readAll("accounts");
   const publicAccounts = accounts
@@ -32,8 +49,8 @@ router.get("/accounts", (req, res) => {
       ticketPrice: a.ticketPrice,
       image: a.image,
       features: a.features,
-      ticketsSold: a.ticketsSold,
       status: a.status, // "open" | "closed"
+      countdownEndsAt: getCountdownEndsAt(a),
       winnerTicket: a.status === "closed" ? a.winnerTicket : undefined,
     }));
   res.json(publicAccounts);
@@ -42,7 +59,9 @@ router.get("/accounts", (req, res) => {
 router.get("/accounts/:id", (req, res) => {
   const a = store.findById("accounts", req.params.id);
   if (!a) return res.status(404).json({ error: "Account not found" });
-  res.json(a);
+  // Public detail: strip ticketsSold, add countdownEndsAt.
+  const { ticketsSold, ...safe } = a;
+  res.json({ ...safe, countdownEndsAt: getCountdownEndsAt(a) });
 });
 
 // ---------- ADMIN ----------
@@ -73,17 +92,31 @@ router.post("/admin/accounts", requireAdmin, (req, res) => {
   res.status(201).json(account);
 });
 
-// Update name / worth / price / features / status. Editing features here is
+// Update name / worth / price / features / status / countdown. Editing features here is
 // what makes them "appear on the frontend" immediately — the public GET
 // above always reads the latest saved copy, there is no separate step.
 router.put("/admin/accounts/:id", requireAdmin, (req, res) => {
-  const { name, worth, ticketPrice, features, status } = req.body;
+  const { name, worth, ticketPrice, features, status, countdownEndsAt, countdownDaysFromNow } = req.body;
   const patch = {};
   if (name !== undefined) patch.name = name;
   if (worth !== undefined) patch.worth = Number(worth);
   if (ticketPrice !== undefined) patch.ticketPrice = Number(ticketPrice);
   if (features !== undefined) patch.features = features;
   if (status !== undefined) patch.status = status;
+  if (countdownEndsAt !== undefined) {
+    if (countdownEndsAt === null || countdownEndsAt === "") {
+      patch.countdownEndsAt = null;
+    } else {
+      const d = new Date(countdownEndsAt);
+      if (isNaN(d.getTime())) return res.status(400).json({ error: "countdownEndsAt is not a valid date" });
+      patch.countdownEndsAt = d.toISOString();
+    }
+  }
+  if (countdownDaysFromNow !== undefined && countdownDaysFromNow !== null && countdownDaysFromNow !== "") {
+    const days = Number(countdownDaysFromNow);
+    if (!(days > 0) || days > 365) return res.status(400).json({ error: "countdownDaysFromNow must be between 1 and 365" });
+    patch.countdownEndsAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+  }
 
   const updated = store.update("accounts", req.params.id, patch);
   if (!updated) return res.status(404).json({ error: "Account not found" });

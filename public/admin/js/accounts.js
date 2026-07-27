@@ -68,6 +68,9 @@ async function loadAccounts() {
 
 function renderAccountRow(a) {
   const image = a.image ? a.image : null;
+  const countdownEndsStr = a.countdownEndsAt
+    ? new Date(a.countdownEndsAt).toLocaleString()
+    : "— (using default from Settings)";
   return `
     <div class="panel" id="acc-${a.id}">
       <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start;">
@@ -76,6 +79,7 @@ function renderAccountRow(a) {
           <strong style="color:#fff;font-size:15px;">${a.name}</strong>
           <span class="badge ${a.status}">${a.status}</span>
           <div class="help" style="margin-top:6px;">${moneyKsh(a.worth)} &middot; ${moneyKsh(a.ticketPrice)}/ticket &middot; ${a.ticketsSold} sold</div>
+          <div class="help" style="margin-top:4px;color:var(--cyan);">⏱ Countdown ends: <strong>${countdownEndsStr}</strong></div>
           ${a.winnerTicket ? `<div class="help" style="color:var(--gold);margin-top:4px;">Winning ticket: <strong>${a.winnerTicket}</strong> (${a.winnerEmail})</div>` : ""}
         </div>
         <div style="display:flex; flex-direction:column; gap:6px;">
@@ -103,6 +107,11 @@ function renderAccountRow(a) {
           <textarea class="edit-features">${(a.features || []).join("\n")}</textarea>
           <span class="help">Saving this updates what buyers see on the public site immediately.</span>
         </div>
+        <div class="form-row">
+          <label>Countdown — days from now (overrides default)</label>
+          <input type="number" min="1" max="365" class="edit-countdown-days" placeholder="e.g. 7" />
+          <span class="help">Sets a new countdown end time for this raffle only. Leave blank to keep the current end time.</span>
+        </div>
         <button class="btn small save-edit-btn" data-id="${a.id}">Save changes</button>
       </div>
     </div>
@@ -122,8 +131,18 @@ function wireAccountRow(a) {
     const worth = row.querySelector(".edit-worth").value;
     const ticketPrice = row.querySelector(".edit-price").value;
     const features = row.querySelector(".edit-features").value.split("\n").map((s) => s.trim()).filter(Boolean);
+    const countdownDaysRaw = row.querySelector(".edit-countdown-days").value;
+    const payload = { name, worth, ticketPrice, features };
+    if (countdownDaysRaw !== "" && countdownDaysRaw !== null) {
+      const d = Number(countdownDaysRaw);
+      if (!(d > 0) || d > 365) {
+        showAlert("Countdown days must be between 1 and 365.", "error");
+        return;
+      }
+      payload.countdownDaysFromNow = d;
+    }
     try {
-      await adminPut(`/admin/accounts/${a.id}`, { name, worth, ticketPrice, features });
+      await adminPut(`/admin/accounts/${a.id}`, payload);
       showAlert("Account updated.", "success");
       loadAccounts();
     } catch (err) {

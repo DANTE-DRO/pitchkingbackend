@@ -69,15 +69,34 @@ router.get("/admin/settings", requireAdmin, (req, res) => {
   res.json(rows[0]);
 });
 
-// Body: { winnerPercent, platformPercent } — must add up to 100.
+// Public read-only settings (for the raffle countdown, etc.) — no secrets exposed.
+router.get("/settings/public", (req, res) => {
+  const rows = store.readAll("settings");
+  const s = rows[0] || {};
+  res.json({
+    raffleCountdownDays: Number(s.raffleCountdownDays) > 0 ? Number(s.raffleCountdownDays) : 7,
+  });
+});
+
+// Body: { winnerPercent, platformPercent, raffleCountdownDays }
+//   - winnerPercent + platformPercent must add up to 100 (unchanged rule).
+//   - raffleCountdownDays is optional; if provided it must be a positive number.
 router.post("/admin/settings", requireAdmin, (req, res) => {
-  const { winnerPercent, platformPercent } = req.body;
+  const { winnerPercent, platformPercent, raffleCountdownDays } = req.body;
   const wp = Number(winnerPercent);
   const pp = Number(platformPercent);
   if (!(wp > 0) || !(pp >= 0) || wp + pp !== 100) {
     return res.status(400).json({ error: "winnerPercent and platformPercent must add up to exactly 100" });
   }
-  const updated = store.update("settings", "settings", { winnerPercent: wp, platformPercent: pp });
+  const patch = { winnerPercent: wp, platformPercent: pp };
+  if (raffleCountdownDays !== undefined && raffleCountdownDays !== null && raffleCountdownDays !== "") {
+    const days = Number(raffleCountdownDays);
+    if (!(days > 0) || days > 365) {
+      return res.status(400).json({ error: "raffleCountdownDays must be a number between 1 and 365" });
+    }
+    patch.raffleCountdownDays = days;
+  }
+  const updated = store.update("settings", "settings", patch);
   res.json(updated);
 });
 

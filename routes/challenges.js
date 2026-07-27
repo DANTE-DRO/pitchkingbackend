@@ -41,6 +41,11 @@ function publicChallenge(c) {
     status: c.status,
     creatorUsername: c.creator.username,
     participantCount: c.participants.length,
+    participantUsernames: c.participants.map((p) => p.username),
+    contributions: c.participants.map((p) => ({
+      username: p.username,
+      contributed: c.amount,
+    })),
     totalPot: c.amount * c.participants.length,
     createdAt: c.createdAt,
     endedAt: c.endedAt || null,
@@ -251,13 +256,19 @@ router.get("/challenges/:id", (req, res) => {
     amount: c.amount,
     status: c.status,
     creatorUsername: c.creator.username,
+    creatorParticipantId: c.creator.participantId,
     participants: c.participants.map((p) => ({
       participantId: p.participantId,
       username: p.username,
       voted: p.voted,
       votedFor: p.votedFor,
+      contributed: c.amount,
     })),
     participantCount: c.participants.length,
+    contributions: c.participants.map((p) => ({
+      username: p.username,
+      contributed: c.amount,
+    })),
     totalPot: c.amount * c.participants.length,
     winner: c.winner,
     payout: c.payout,
@@ -265,6 +276,53 @@ router.get("/challenges/:id", (req, res) => {
     endedAt: c.endedAt,
     refundEligible: isRefundEligible(c),
   });
+});
+
+// Look up all challenges a given email is part of (as creator or participant).
+// Returns each with the caller's participantId embedded so the frontend can act
+// on it directly (end / vote / refund / withdraw). Additive endpoint — does not
+// change any existing behaviour.
+router.get("/my-challenges", (req, res) => {
+  const email = String(req.query.email || "").trim().toLowerCase();
+  if (!email) return res.status(400).json({ error: "email query parameter is required" });
+
+  const all = store.readAll("challenges");
+  const mine = all
+    .filter((c) => c.participants.some((p) => (p.email || "").toLowerCase() === email))
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .map((c) => {
+      const me = c.participants.find((p) => (p.email || "").toLowerCase() === email);
+      const isCreator = c.creator && c.creator.participantId === me.participantId;
+      return {
+        id: c.id,
+        name: c.name,
+        amount: c.amount,
+        status: c.status,
+        creatorUsername: c.creator.username,
+        isCreator,
+        myParticipantId: me.participantId,
+        myUsername: me.username,
+        voted: me.voted,
+        votedFor: me.votedFor,
+        participants: c.participants.map((p) => ({
+          participantId: p.participantId,
+          username: p.username,
+          voted: p.voted,
+          votedFor: p.votedFor,
+          contributed: c.amount,
+        })),
+        contributions: c.participants.map((p) => ({ username: p.username, contributed: c.amount })),
+        participantCount: c.participants.length,
+        totalPot: c.amount * c.participants.length,
+        winner: c.winner,
+        payout: c.payout,
+        createdAt: c.createdAt,
+        endedAt: c.endedAt,
+        refundEligible: isRefundEligible(c),
+      };
+    });
+
+  res.json(mine);
 });
 
 function isRefundEligible(c) {
