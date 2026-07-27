@@ -176,10 +176,17 @@ router.post("/challenges/join", async (req, res) => {
   }
 
   // 1) Send the real STK Push to the joiner's phone.
+  //    IMPORTANT: KCB Buni deduplicates concurrent STK pushes that share the
+  //    same accountReference on the same till. The creator's push already
+  //    used c.id as its reference, so a joiner reusing c.id verbatim gets
+  //    silently swallowed by the gateway and never lands on the phone.
+  //    We append a short per-join suffix so every joiner gets a unique
+  //    reference while still tying the payment back to this challenge.
+  const joinRef = `${c.id}J${crypto.randomBytes(2).toString("hex").toUpperCase()}`;
   const payment = await initiateSTKPush({
     phone,
     amount: joinAmount,
-    accountRef: c.id,
+    accountRef: joinRef,
     description: `Stake to join challenge "${c.name}"`,
   });
   if (!payment.success) {
@@ -191,8 +198,11 @@ router.post("/challenges/join", async (req, res) => {
   //    do we add them to the challenge.
   const settlement = await waitForSettlement(payment.checkoutRequestId);
   if (settlement.status !== "SUCCESS") {
+    const cancelled = /cancel/i.test(settlement.message || "") || settlement.resultCode === 1032;
     return res.status(402).json({
-      error: settlement.message || "Payment was not completed. Please try again.",
+      error: cancelled
+        ? "Payment cancelled."
+        : (settlement.message || "Payment was not completed. Please try again."),
       checkoutRequestId: payment.checkoutRequestId,
     });
   }

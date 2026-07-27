@@ -43,11 +43,14 @@ router.get("/callback/status/:checkoutId", (req, res) => {
     status: rec.status,                        // PENDING | SUCCESS | FAILED
     mpesaReceipt: rec.mpesaReceipt || null,
     failureReason: rec.failureReason || null,
+    cancelled: Boolean(rec.cancelled),
+    resultCode: rec.resultCode,
     amount: rec.amount,
     phone: rec.phone,
     message:
       rec.status === "PENDING" ? "Waiting for payment confirmation…" :
       rec.status === "SUCCESS" ? "Payment successful" :
+      rec.cancelled ? "Payment cancelled." :
       rec.failureReason || "Payment was not completed",
   });
 });
