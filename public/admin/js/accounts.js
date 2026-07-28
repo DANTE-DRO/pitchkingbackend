@@ -7,48 +7,10 @@ function showAlert(msg, type = "info") {
   setTimeout(() => (alertBox.innerHTML = ""), 5000);
 }
 
-// ---------- Create account: feature tag builder ----------
-let newFeatures = [];
-function renderNewFeatureTags() {
-  document.getElementById("newFeatureTags").innerHTML = newFeatures
-    .map((f, i) => `<span class="feature-tag">${f} <button onclick="removeNewFeature(${i})">&times;</button></span>`)
-    .join("");
-}
-function removeNewFeature(i) {
-  newFeatures.splice(i, 1);
-  renderNewFeatureTags();
-}
-document.getElementById("addFeatureBtn").addEventListener("click", () => {
-  const input = document.getElementById("newFeature");
-  const val = input.value.trim();
-  if (val) {
-    newFeatures.push(val);
-    input.value = "";
-    renderNewFeatureTags();
-  }
-});
-
-document.getElementById("createAccountBtn").addEventListener("click", async () => {
-  const name = document.getElementById("newName").value.trim();
-  const worth = document.getElementById("newWorth").value;
-  const ticketPrice = document.getElementById("newPrice").value;
-  if (!name || !worth || !ticketPrice) {
-    showAlert("Please fill in name, worth and ticket price.", "error");
-    return;
-  }
-  try {
-    await adminPost("/admin/accounts", { name, worth, ticketPrice, features: newFeatures });
-    document.getElementById("newName").value = "";
-    document.getElementById("newWorth").value = "";
-    document.getElementById("newPrice").value = "";
-    newFeatures = [];
-    renderNewFeatureTags();
-    showAlert("Account created.", "success");
-    loadAccounts();
-  } catch (err) {
-    showAlert(err.message, "error");
-  }
-});
+// NOTE: Raffle open CREATION has been removed from this admin panel by design —
+// raffle opens are now created and deleted from the hidden frontend control
+// panel. Editing / drawing / closing / deleting / image / countdown all remain
+// available below on each existing account.
 
 // ---------- List + manage existing accounts ----------
 async function loadAccounts() {
@@ -56,7 +18,7 @@ async function loadAccounts() {
   try {
     const accounts = await adminGet("/admin/accounts");
     if (!accounts.length) {
-      list.innerHTML = `<p class="help">No accounts yet — add one above.</p>`;
+      list.innerHTML = `<p class="help">No accounts yet — create raffle opens from the frontend control panel.</p>`;
       return;
     }
     list.innerHTML = accounts.map(renderAccountRow).join("");
@@ -67,14 +29,15 @@ async function loadAccounts() {
 }
 
 function renderAccountRow(a) {
-  const image = a.image ? a.image : null;
+  // Prefer the Imgur URL if it was set; otherwise fall back to the legacy uploaded image.
+  const image = a.imageUrl ? a.imageUrl : (a.image ? a.image : null);
   const countdownEndsStr = a.countdownEndsAt
     ? new Date(a.countdownEndsAt).toLocaleString()
     : "— (using default from Settings)";
   return `
     <div class="panel" id="acc-${a.id}">
       <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start;">
-        ${image ? `<img class="thumb" src="${image}" />` : `<div class="thumb"></div>`}
+        ${image ? `<img class="thumb" src="${image}" style="object-fit:contain;background:#0a1428;" />` : `<div class="thumb"></div>`}
         <div style="flex:1; min-width:220px;">
           <strong style="color:#fff;font-size:15px;">${a.name}</strong>
           <span class="badge ${a.status}">${a.status}</span>
@@ -90,7 +53,6 @@ function renderAccountRow(a) {
           <button class="btn secondary small edit-btn" data-id="${a.id}">Edit</button>
           ${a.status === "open" ? `<button class="btn gold small draw-btn" data-id="${a.id}">Draw winner</button>` : ""}
           ${a.status === "open" ? `<button class="btn secondary small close-btn" data-id="${a.id}">Close</button>` : ""}
-          <button class="btn danger small delete-btn" data-id="${a.id}">Delete</button>
         </div>
       </div>
 
@@ -106,6 +68,11 @@ function renderAccountRow(a) {
           <label>Features (one per line)</label>
           <textarea class="edit-features">${(a.features || []).join("\n")}</textarea>
           <span class="help">Saving this updates what buyers see on the public site immediately.</span>
+        </div>
+        <div class="form-row">
+          <label>Imgur image URL (optional)</label>
+          <input type="text" class="edit-imgurl" value="${a.imageUrl || ""}" placeholder="https://imgur.com/AbCdEfG or https://i.imgur.com/AbCdEfG.jpg" />
+          <span class="help">Paste an Imgur link. Leave blank to keep the current image.</span>
         </div>
         <div class="form-row">
           <label>Countdown — days from now (overrides default)</label>
@@ -132,6 +99,7 @@ function wireAccountRow(a) {
     const ticketPrice = row.querySelector(".edit-price").value;
     const features = row.querySelector(".edit-features").value.split("\n").map((s) => s.trim()).filter(Boolean);
     const countdownDaysRaw = row.querySelector(".edit-countdown-days").value;
+    const imgUrlRaw = row.querySelector(".edit-imgurl").value.trim();
     const payload = { name, worth, ticketPrice, features };
     if (countdownDaysRaw !== "" && countdownDaysRaw !== null) {
       const d = Number(countdownDaysRaw);
@@ -140,6 +108,9 @@ function wireAccountRow(a) {
         return;
       }
       payload.countdownDaysFromNow = d;
+    }
+    if (imgUrlRaw !== "") {
+      payload.imageUrl = imgUrlRaw;
     }
     try {
       await adminPut(`/admin/accounts/${a.id}`, payload);
@@ -188,12 +159,6 @@ function wireAccountRow(a) {
       }
     });
   }
-
-  row.querySelector(".delete-btn").addEventListener("click", async () => {
-    if (!confirm(`Delete "${a.name}" permanently? This cannot be undone.`)) return;
-    await adminDelete(`/admin/accounts/${a.id}`);
-    loadAccounts();
-  });
 }
 
 loadAccounts();
