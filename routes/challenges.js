@@ -19,6 +19,38 @@ const { initiateSTKPush, waitForSettlement } = require("../lib/payment");
 
 const router = express.Router();
 
+// ──────────────────────────────────────────────
+// PUBLIC CHAT DROPS — broadcast board
+// A tiny in-memory ring buffer of recent chat drops so a message
+// one user types is rained on every user's screen (via the poll).
+// Additive only — no other logic depends on this.
+// ──────────────────────────────────────────────
+const CHAT_DROPS = [];
+const CHAT_DROPS_MAX = 100;
+let CHAT_DROP_SEQ = 0;
+
+router.post("/chat-drops", (req, res) => {
+  const name = String((req.body && req.body.name) || "anon").trim().slice(0, 20) || "anon";
+  const message = String((req.body && req.body.message) || "").trim().slice(0, 120);
+  if (!message) return res.status(400).json({ error: "message is required" });
+  CHAT_DROP_SEQ += 1;
+  const drop = {
+    id: CHAT_DROP_SEQ,
+    name,
+    message,
+    timestamp: new Date().toISOString(),
+  };
+  CHAT_DROPS.push(drop);
+  if (CHAT_DROPS.length > CHAT_DROPS_MAX) CHAT_DROPS.splice(0, CHAT_DROPS.length - CHAT_DROPS_MAX);
+  res.status(201).json(drop);
+});
+
+router.get("/chat-drops", (req, res) => {
+  const since = Number(req.query.since || 0);
+  const list = CHAT_DROPS.filter((d) => d.id > since);
+  res.json({ lastId: CHAT_DROP_SEQ, drops: list });
+});
+
 const SYSTEM_PERCENT = 20;
 const WINNER_PERCENT = 80;
 const REFUND_WINDOW_MS = 30 * 60 * 1000; // 30 minutes

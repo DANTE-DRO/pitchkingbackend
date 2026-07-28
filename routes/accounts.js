@@ -97,6 +97,62 @@ router.get("/admin/accounts", requireAdmin, (req, res) => {
   res.json(store.readAll("accounts"));
 });
 
+// Additive endpoint: create-or-restore a raffle using a client-supplied id.
+//
+// Why: raffle opens are now created & persisted on the frontend
+// (localStorage) so they survive Render free-tier sleep/redeploys.
+// When a customer starts a payment, the frontend calls this endpoint to
+// make sure the backend also has a copy under the SAME id — otherwise
+// after a cold start the backend wouldn't know the raffle and ticket
+// issuing would fail. If a record with that id already exists, it's a
+// no-op (idempotent) — nothing about existing tickets is disturbed.
+router.post("/admin/accounts/rehydrate", requireAdmin, (req, res) => {
+  const { id, name, worth, ticketPrice, features, imageUrl, tournamentLink, countdownEndsAt, createdAt } = req.body || {};
+  if (!id || !name || !worth || !ticketPrice) {
+    return res.status(400).json({ error: "id, name, worth and ticketPrice are required" });
+  }
+  const existing = store.findById("accounts", id);
+  if (existing) {
+    // Idempotent — keep whatever the backend already has.
+    return res.status(200).json(existing);
+  }
+  let imgUrlClean = null;
+  if (imageUrl !== undefined && imageUrl !== null && String(imageUrl).trim() !== "") {
+    imgUrlClean = normaliseImgurUrl(imageUrl);
+    if (!imgUrlClean) {
+      return res.status(400).json({ error: "imageUrl must be a valid Imgur (or direct image) URL" });
+    }
+  }
+  let ends = null;
+  if (countdownEndsAt) {
+    const d = new Date(countdownEndsAt);
+    if (!isNaN(d.getTime())) ends = d.toISOString();
+  }
+  if (!ends) {
+    const rows = store.readAll("settings");
+    const days = Number(rows[0] && rows[0].raffleCountdownDays) > 0 ? Number(rows[0].raffleCountdownDays) : 7;
+    ends = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+  }
+  const account = {
+    id: String(id),
+    name: String(name),
+    worth: Number(worth),
+    ticketPrice: Number(ticketPrice),
+    features: Array.isArray(features) ? features : [],
+    image: null,
+    imageUrl: imgUrlClean,
+    ticketsSold: 0,
+    status: "open",
+    winnerTicket: null,
+    winnerEmail: null,
+    tournamentLink: (tournamentLink && String(tournamentLink).trim()) || null,
+    countdownEndsAt: ends,
+    createdAt: createdAt || new Date().toISOString(),
+  };
+  store.insert("accounts", account);
+  res.status(201).json(account);
+});
+
 router.post("/admin/accounts", requireAdmin, (req, res) => {
   const { name, worth, ticketPrice, features, imageUrl, tournamentLink } = req.body;
   if (!name || !worth || !ticketPrice) {
