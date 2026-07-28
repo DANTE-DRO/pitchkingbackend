@@ -129,6 +129,68 @@ router.post("/raffle/buy", async (req, res) => {
 });
 
 // ------------------------------------------------------------------
+// JOIN TOURNAMENT
+// Body: { accountId, amount, phone }
+// Fires a REAL STK Push to the customer's phone. Only after the KCB
+// callback confirms the payment was successful does it return the
+// tournament WhatsApp group link stored on the account.
+// The link is set / changed / deleted by the admin from the frontend
+// control panel or the backend admin panel — it persists on the account
+// record until the admin explicitly removes it.
+// ------------------------------------------------------------------
+router.post("/raffle/join-tournament", async (req, res) => {
+  const { accountId, amount, phone } = req.body;
+
+  if (!accountId || !amount || !phone) {
+    return res.status(400).json({ error: "accountId, amount and phone are required" });
+  }
+  const entryAmount = Number(amount);
+  if (!(entryAmount > 0)) {
+    return res.status(400).json({ error: "amount must be greater than 0" });
+  }
+
+  const account = store.findById("accounts", accountId);
+  if (!account) return res.status(404).json({ error: "Account not found" });
+  if (account.status !== "open") {
+    return res.status(400).json({ error: "This raffle is no longer open for tournament entry" });
+  }
+
+  // 1) Fire the real STK Push to the buyer's phone.
+  const payment = await initiateSTKPush({
+    phone,
+    amount: entryAmount,
+    accountRef: `${account.id}T`,
+    description: `Tournament entry for ${account.name}`,
+  });
+
+  if (!payment.success) {
+    return res.status(402).json({ error: payment.error || "Payment could not be completed. Please try again." });
+  }
+
+  // 2) Wait for the KCB callback to confirm the customer entered
+  //    their M-Pesa PIN and the money actually moved.
+  const settlement = await waitForSettlement(payment.checkoutRequestId);
+  if (settlement.status !== "SUCCESS") {
+    return res.status(402).json({
+      error: settlement.message || "Payment was not completed. Please try again.",
+      checkoutRequestId: payment.checkoutRequestId,
+    });
+  }
+
+  // 3) Payment succeeded — return the tournament WhatsApp group link.
+  //    The link comes from the account record (set by admin, persists
+  //    until admin explicitly deletes it).
+  res.status(200).json({
+    success: true,
+    checkoutRequestId: payment.checkoutRequestId || null,
+    mpesaReceipt: settlement.mpesaReceipt || null,
+    tournamentLink: account.tournamentLink || null,
+    accountName: account.name,
+    message: "Payment successful. Your tournament link is ready.",
+  });
+});
+
+// ------------------------------------------------------------------
 // DOWNLOAD RECEIPT (public, by purchaseId)
 // Returns a printable, self-contained HTML receipt with a Content-
 // Disposition header so the browser will offer it as a file download.

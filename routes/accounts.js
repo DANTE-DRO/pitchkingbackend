@@ -78,6 +78,7 @@ router.get("/accounts", (req, res) => {
       status: a.status, // "open" | "closed"
       countdownEndsAt: getCountdownEndsAt(a),
       winnerTicket: a.status === "closed" ? a.winnerTicket : undefined,
+      tournamentLink: a.tournamentLink || null,
     }));
   res.json(publicAccounts);
 });
@@ -97,7 +98,7 @@ router.get("/admin/accounts", requireAdmin, (req, res) => {
 });
 
 router.post("/admin/accounts", requireAdmin, (req, res) => {
-  const { name, worth, ticketPrice, features, imageUrl } = req.body;
+  const { name, worth, ticketPrice, features, imageUrl, tournamentLink } = req.body;
   if (!name || !worth || !ticketPrice) {
     return res.status(400).json({ error: "name, worth and ticketPrice are required" });
   }
@@ -108,6 +109,16 @@ router.post("/admin/accounts", requireAdmin, (req, res) => {
       return res.status(400).json({ error: "imageUrl must be a valid Imgur (or direct image) URL" });
     }
   }
+  // Explicitly set countdownEndsAt at creation time so it is persisted as
+  // a fixed timestamp — it will NOT restart if the backend sleeps/restarts.
+  // The admin can still override it later from the edit panel.
+  const settingsRows = store.readAll("settings");
+  const countdownDays = Number(settingsRows[0] && settingsRows[0].raffleCountdownDays) > 0
+    ? Number(settingsRows[0].raffleCountdownDays)
+    : 7;
+  const createdAt = new Date().toISOString();
+  const countdownEndsAt = new Date(Date.now() + countdownDays * 24 * 60 * 60 * 1000).toISOString();
+
   const account = {
     id: crypto.randomUUID(),
     name,
@@ -120,7 +131,9 @@ router.post("/admin/accounts", requireAdmin, (req, res) => {
     status: "open", // open | closed | archived
     winnerTicket: null,
     winnerEmail: null,
-    createdAt: new Date().toISOString(),
+    tournamentLink: tournamentLink || null,
+    countdownEndsAt,
+    createdAt,
   };
   store.insert("accounts", account);
   res.status(201).json(account);
@@ -128,7 +141,7 @@ router.post("/admin/accounts", requireAdmin, (req, res) => {
 
 // Update name / worth / price / features / status / countdown / imageUrl.
 router.put("/admin/accounts/:id", requireAdmin, (req, res) => {
-  const { name, worth, ticketPrice, features, status, countdownEndsAt, countdownDaysFromNow, imageUrl } = req.body;
+  const { name, worth, ticketPrice, features, status, countdownEndsAt, countdownDaysFromNow, imageUrl, tournamentLink } = req.body;
   const patch = {};
   if (name !== undefined) patch.name = name;
   if (worth !== undefined) patch.worth = Number(worth);
@@ -156,6 +169,14 @@ router.put("/admin/accounts/:id", requireAdmin, (req, res) => {
       const clean = normaliseImgurUrl(imageUrl);
       if (!clean) return res.status(400).json({ error: "imageUrl must be a valid Imgur (or direct image) URL" });
       patch.imageUrl = clean;
+    }
+  }
+
+  if (tournamentLink !== undefined) {
+    if (tournamentLink === null || String(tournamentLink).trim() === "") {
+      patch.tournamentLink = null;
+    } else {
+      patch.tournamentLink = String(tournamentLink).trim();
     }
   }
 
