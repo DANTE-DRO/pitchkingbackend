@@ -79,8 +79,40 @@ router.get("/accounts", (req, res) => {
       countdownEndsAt: getCountdownEndsAt(a),
       winnerTicket: a.status === "closed" ? a.winnerTicket : undefined,
       tournamentLink: a.tournamentLink || null,
+      // Revision counter — bumps on every admin edit. Frontend uses it to
+      // detect that a raffle has been changed on another device and
+      // overwrite its immortal local copy.
+      rev: Number(a.rev) || 0,
     }));
   res.json(publicAccounts);
+});
+
+// ---------- AUTHORITY FEED ----------
+//
+// Public, cheap, cache-busting endpoint that returns the two pieces of
+// truth every browser needs to align its immortal-local copy with the
+// operator's latest state:
+//
+//   • tombstones — every raffle id the operator has ever DELETED from
+//                  ANY device. Persisted server-side so it survives
+//                  Render's ephemeral restarts (via store's persistence
+//                  layer). Once here, no browser is allowed to keep the
+//                  raffle in localStorage/IDB or push it back via
+//                  /accounts/rehydrate.
+//
+//   • revisions — { id: rev } for every current raffle. Browsers whose
+//                 local rev is older than server rev will overwrite
+//                 their local copy with the server's fields, so an edit
+//                 made on the creator's device appears on every device.
+router.get("/accounts/authority", (req, res) => {
+  const tombstones = store.readAll("tombstones").map((t) => String(t.id));
+  const revisions = {};
+  store.readAll("accounts").forEach((a) => {
+    if (!a || !a.id) return;
+    revisions[a.id] = Number(a.rev) || 0;
+  });
+  res.set("Cache-Control", "no-store");
+  res.json({ tombstones, revisions });
 });
 
 router.get("/accounts/:id", (req, res) => {
@@ -131,6 +163,13 @@ function handleRehydrate(req, res) {
   if (!id || !name || !worth || !ticketPrice) {
     return res.status(400).json({ error: "id, name, worth and ticketPrice are required" });
   }
+  // If this id has been tombstoned by the operator on ANY device,
+  // never re-insert it — this is the fix that makes deletions propagate
+  // to every browser on the planet instead of only the creator's device.
+  const tombs = store.readAll("tombstones").map((t) => String(t.id));
+  if (tombs.indexOf(String(id)) !== -1) {
+    return res.status(410).json({ error: "This raffle was deleted by the operator." });
+  }
   const existing = store.findById("accounts", id);
   if (existing) {
     // Idempotent — keep whatever the backend already has, do NOT overwrite.
@@ -168,6 +207,7 @@ function handleRehydrate(req, res) {
     tournamentLink: (tournamentLink && String(tournamentLink).trim()) || null,
     countdownEndsAt: ends,
     createdAt: createdAt || new Date().toISOString(),
+    rev: 0,
   };
   store.insert("accounts", account);
   return res.status(201).json(account);
@@ -182,6 +222,10 @@ router.post("/admin/accounts/rehydrate", requireAdmin, (req, res) => {
   const { id, name, worth, ticketPrice, features, imageUrl, tournamentLink, countdownEndsAt, createdAt } = req.body || {};
   if (!id || !name || !worth || !ticketPrice) {
     return res.status(400).json({ error: "id, name, worth and ticketPrice are required" });
+  }
+  const tombsAdm = store.readAll("tombstones").map((t) => String(t.id));
+  if (tombsAdm.indexOf(String(id)) !== -1) {
+    return res.status(410).json({ error: "This raffle was deleted by the operator." });
   }
   const existing = store.findById("accounts", id);
   if (existing) {
@@ -220,6 +264,7 @@ router.post("/admin/accounts/rehydrate", requireAdmin, (req, res) => {
     tournamentLink: (tournamentLink && String(tournamentLink).trim()) || null,
     countdownEndsAt: ends,
     createdAt: createdAt || new Date().toISOString(),
+    rev: 0,
   };
   store.insert("accounts", account);
   res.status(201).json(account);
@@ -262,6 +307,7 @@ router.post("/admin/accounts", requireAdmin, (req, res) => {
     tournamentLink: tournamentLink || null,
     countdownEndsAt,
     createdAt,
+    rev: 0,
   };
   store.insert("accounts", account);
   res.status(201).json(account);
@@ -308,9 +354,40 @@ router.put("/admin/accounts/:id", requireAdmin, (req, res) => {
     }
   }
 
+  // Bump the revision counter so every browser knows to overwrite its
+  // immortal local copy with these new field values on next sync.
+  const cur = store.findById("accounts", req.params.id);
+  patch.rev = (Number(cur && cur.rev) || 0) + 1;
+
   const updated = store.update("accounts", req.params.id, patch);
-  if (!updated) return res.status(404).json({ error: "Account not found" });
-  res.json(updated);
+  if (updated) return res.json(updated);
+
+  // The raffle was never mirrored to the backend yet (it lived only in
+  // the creator's immortal-local storage). Materialise a minimal row from
+  // the patch so the revision + fields can propagate to every other
+  // device via /accounts/authority. Anything the operator didn't supply
+  // is left null / empty; subsequent syncs from the creator's browser
+  // will enrich it. This is what makes tournament-link and other edits
+  // reach every user's phone even before a full rehydrate has happened.
+  const materialised = {
+    id: String(req.params.id),
+    name: patch.name || "",
+    worth: Number(patch.worth) || 0,
+    ticketPrice: Number(patch.ticketPrice) || 0,
+    features: Array.isArray(patch.features) ? patch.features : [],
+    image: null,
+    imageUrl: patch.imageUrl || null,
+    ticketsSold: 0,
+    status: patch.status || "open",
+    winnerTicket: null,
+    winnerEmail: null,
+    tournamentLink: (patch.tournamentLink === undefined) ? null : patch.tournamentLink,
+    countdownEndsAt: patch.countdownEndsAt || null,
+    createdAt: new Date().toISOString(),
+    rev: patch.rev,
+  };
+  store.insert("accounts", materialised);
+  res.json(materialised);
 });
 
 router.post("/admin/accounts/:id/image", requireAdmin, upload.single("image"), (req, res) => {
@@ -346,8 +423,23 @@ router.post("/admin/accounts/:id/draw", requireAdmin, (req, res) => {
 });
 
 router.delete("/admin/accounts/:id", requireAdmin, (req, res) => {
-  const all = store.readAll("accounts").filter((a) => a.id !== req.params.id);
+  const targetId = String(req.params.id);
+  const all = store.readAll("accounts").filter((a) => a.id !== targetId);
   store.writeAll("accounts", all);
+
+  // Permanent server-side tombstone so no visitor's browser can push this
+  // raffle back via /accounts/rehydrate. This is what makes the delete
+  // apply on EVERY device, not only the creator's. Written EVEN IF the
+  // account row was never mirrored to the backend — the tombstone alone
+  // is enough to block every future rehydrate for this id.
+  try {
+    const tombs = store.readAll("tombstones");
+    if (!tombs.some((t) => String(t.id) === targetId)) {
+      tombs.push({ id: targetId, at: new Date().toISOString() });
+      store.writeAll("tombstones", tombs);
+    }
+  } catch (_) {}
+
   res.json({ ok: true });
 });
 
