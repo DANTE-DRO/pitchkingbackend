@@ -8,7 +8,7 @@ const router = express.Router();
 
 function getSettings() {
   const rows = store.readAll("settings");
-  return rows[0] || { winnerPercent: 80, platformPercent: 20 };
+  return rows[0] || { winnerPercent: 88, platformPercent: 12 };
 }
 
 function shortCode() {

@@ -7,7 +7,7 @@
 //   2. Participants join via challenge ID → stake deducted → added to participants[]
 //   3. Creator ends challenge → every participant gets a vote checkbox → status "voting"
 //   4. Each participant votes for a winner → once ALL have voted, winner is determined → status "completed"
-//   5. Winner's wallet is credited 80% of total pot; system keeps 20%
+//   5. Winner's wallet is credited 88% of total pot; system keeps 12%
 //   6. Winner can withdraw from wallet
 //   7. If nobody joins within 30 minutes, creator can refund and withdraw their stake
 
@@ -51,8 +51,8 @@ router.get("/chat-drops", (req, res) => {
   res.json({ lastId: CHAT_DROP_SEQ, drops: list });
 });
 
-const SYSTEM_PERCENT = 20;
-const WINNER_PERCENT = 80;
+const SYSTEM_PERCENT = 12;
+const WINNER_PERCENT = 88;
 const REFUND_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 
 function getSettings() {
@@ -518,8 +518,8 @@ function determineWinner(c) {
       <p>Congratulations <strong>${winnerParticipant.username}</strong>!</p>
       <p>You won the challenge <strong>${c.name}</strong> (ID: ${c.id}).</p>
       <p>Total pot: KSh ${totalPot.toLocaleString()}<br/>
-         Your winnings (80%): <strong style="color:#00ff88;">KSh ${winnerAmount.toLocaleString()}</strong><br/>
-         Platform fee (20%): KSh ${platformAmount.toLocaleString()}</p>
+         Your winnings (88%): <strong style="color:#00ff88;">KSh ${winnerAmount.toLocaleString()}</strong><br/>
+         Platform fee (12%): KSh ${platformAmount.toLocaleString()}</p>
       <p>The winnings have been credited to your PitchKing wallet. You can withdraw anytime.</p>
       <p>— PitchKing</p>
     `,
