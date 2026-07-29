@@ -106,6 +106,78 @@ router.get("/admin/accounts", requireAdmin, (req, res) => {
 // after a cold start the backend wouldn't know the raffle and ticket
 // issuing would fail. If a record with that id already exists, it's a
 // no-op (idempotent) — nothing about existing tickets is disturbed.
+// ---------- PUBLIC IMMORTAL-RAFFLE REHYDRATE ----------
+//
+// Same behaviour as /admin/accounts/rehydrate, but NO admin token required.
+// This is what makes raffles truly immortal for every visitor:
+//   • Every browser that has ever seen a raffle keeps a local copy
+//     (see frontend/js/immortal-raffles.js).
+//   • On page load, that browser silently POSTs its local raffles here.
+//   • The endpoint is STRICTLY idempotent: if a raffle with the given
+//     id already exists on the backend, nothing is touched. It can ONLY
+//     insert a missing record — never overwrite, modify, or delete.
+//   • Result: as soon as any device with a cached copy visits the site
+//     after Render's free-tier sleep/redeploy wipes the disk, the raffle
+//     list is repopulated for everyone else — without anyone touching
+//     the admin panel.
+//
+// This is safe because:
+//   • ticketsSold, winnerTicket, winnerEmail are ALWAYS reset to their
+//     public defaults (0 / null) on creation — clients cannot forge them.
+//   • Existing records are never mutated, so a malicious client cannot
+//     re-open a closed raffle or change its price.
+function handleRehydrate(req, res) {
+  const { id, name, worth, ticketPrice, features, imageUrl, tournamentLink, countdownEndsAt, createdAt } = req.body || {};
+  if (!id || !name || !worth || !ticketPrice) {
+    return res.status(400).json({ error: "id, name, worth and ticketPrice are required" });
+  }
+  const existing = store.findById("accounts", id);
+  if (existing) {
+    // Idempotent — keep whatever the backend already has, do NOT overwrite.
+    return res.status(200).json(existing);
+  }
+  let imgUrlClean = null;
+  if (imageUrl !== undefined && imageUrl !== null && String(imageUrl).trim() !== "") {
+    imgUrlClean = normaliseImgurUrl(imageUrl);
+    if (!imgUrlClean) {
+      return res.status(400).json({ error: "imageUrl must be a valid Imgur (or direct image) URL" });
+    }
+  }
+  let ends = null;
+  if (countdownEndsAt) {
+    const d = new Date(countdownEndsAt);
+    if (!isNaN(d.getTime())) ends = d.toISOString();
+  }
+  if (!ends) {
+    const rows = store.readAll("settings");
+    const days = Number(rows[0] && rows[0].raffleCountdownDays) > 0 ? Number(rows[0].raffleCountdownDays) : 7;
+    ends = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+  }
+  const account = {
+    id: String(id),
+    name: String(name),
+    worth: Number(worth),
+    ticketPrice: Number(ticketPrice),
+    features: Array.isArray(features) ? features : [],
+    image: null,
+    imageUrl: imgUrlClean,
+    ticketsSold: 0,
+    status: "open",
+    winnerTicket: null,
+    winnerEmail: null,
+    tournamentLink: (tournamentLink && String(tournamentLink).trim()) || null,
+    countdownEndsAt: ends,
+    createdAt: createdAt || new Date().toISOString(),
+  };
+  store.insert("accounts", account);
+  return res.status(201).json(account);
+}
+
+// Public rehydrate — used by every visiting browser to silently
+// re-seed a raffle the backend has forgotten. Idempotent + safe.
+router.post("/accounts/rehydrate", (req, res) => handleRehydrate(req, res));
+
+// Legacy admin rehydrate — kept for backward-compat with any older client.
 router.post("/admin/accounts/rehydrate", requireAdmin, (req, res) => {
   const { id, name, worth, ticketPrice, features, imageUrl, tournamentLink, countdownEndsAt, createdAt } = req.body || {};
   if (!id || !name || !worth || !ticketPrice) {
