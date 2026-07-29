@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PitchKing Admin — Immortal Wallet</title>
+<link rel="stylesheet" href="css/admin.css" />
+<style>
+  .wallet-hero{
+    position:relative;
+    background:linear-gradient(140deg, rgba(17,31,63,.95), rgba(10,20,40,.85));
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:28px 26px 24px;
+    overflow:hidden;
+    margin-bottom:22px;
+  }
+  .wallet-hero::before{
+    content:"";position:absolute;top:0;left:0;right:0;height:4px;
+    background:linear-gradient(90deg,transparent,#ffd400,#00e5ff,#ffd400,transparent);
+  }
+  .wallet-hero::after{
+    content:"";position:absolute;inset:0;pointer-events:none;
+    background:
+      radial-gradient(600px 300px at 90% -20%, rgba(0,229,255,.10), transparent 60%),
+      radial-gradient(500px 240px at -10% 120%, rgba(255,212,0,.08), transparent 60%);
+  }
+  .wallet-label{
+    font-size:11px;font-weight:700;letter-spacing:2px;
+    text-transform:uppercase;color:#ffd400;
+  }
+  .wallet-amount{
+    font-family:"Orbitron","Segoe UI",sans-serif;
+    font-size:44px;font-weight:900;color:#fff;margin-top:10px;
+    text-shadow:0 0 18px rgba(0,229,255,.35);
+    word-break:break-all;
+    position:relative;z-index:2;
+  }
+  .wallet-tag{
+    display:inline-block;margin-top:12px;padding:5px 12px;font-size:11px;
+    letter-spacing:1.5px;text-transform:uppercase;font-weight:700;
+    color:#001018;background:linear-gradient(90deg,#ffd400,#ffb000);
+    clip-path:polygon(8px 0,100% 0,calc(100% - 8px) 100%,0 100%);
+  }
+  .wallet-tag.persist-on{ background:linear-gradient(90deg,#00e5ff,#7cf9ff); }
+  .wallet-meta{
+    margin-top:14px;font-size:12px;color:var(--ink-soft);
+    display:flex;gap:22px;flex-wrap:wrap;
+  }
+  .wallet-meta strong{ color:#fff; }
+  .wallet-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+    gap:14px;margin-bottom:22px;
+  }
+  .wallet-card{
+    background:linear-gradient(160deg, rgba(17,31,63,.9), rgba(10,20,40,.85));
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:18px 18px 16px;
+    position:relative;overflow:hidden;
+  }
+  .wallet-card::before{
+    content:"";position:absolute;top:0;left:0;right:0;height:2px;
+    background:linear-gradient(90deg,transparent,var(--cyan),transparent);
+  }
+  .wallet-card .lbl{
+    font-size:10px;font-weight:700;letter-spacing:1.5px;
+    text-transform:uppercase;color:var(--cyan);
+  }
+  .wallet-card .val{
+    font-family:"Orbitron","Segoe UI",sans-serif;
+    font-size:22px;font-weight:900;color:#fff;margin-top:8px;
+  }
+  .wallet-card .sub{ margin-top:4px;font-size:11px;color:var(--ink-soft); }
+  .ledger-wrap{
+    background:linear-gradient(160deg, rgba(17,31,63,.9), rgba(10,20,40,.85));
+    border:1px solid var(--line);border-radius:10px;padding:18px;
+  }
+  .ledger-wrap h2{ margin-top:0; }
+  .ledger-table{ width:100%;border-collapse:collapse;font-size:13px;margin-top:8px; }
+  .ledger-table th, .ledger-table td{
+    text-align:left;padding:10px 8px;border-bottom:1px solid rgba(30,49,99,.6);
+    vertical-align:top;
+  }
+  .ledger-table th{
+    color:var(--cyan);font-size:11px;letter-spacing:1.2px;
+    text-transform:uppercase;font-weight:700;
+  }
+  .ledger-table td.amt{ color:#fff;font-weight:700;font-family:"Orbitron",sans-serif;white-space:nowrap; }
+  .ledger-table td.src{
+    color:#ffd400;font-size:11px;letter-spacing:1px;
+    text-transform:uppercase;font-weight:700;
+  }
+  .ledger-table td.rcpt{ font-family:"Consolas",monospace;font-size:12px;color:#7cf9ff;word-break:break-all; }
+  .ledger-empty{ padding:24px;text-align:center;color:var(--ink-soft); }
+  .refresh-row{
+    display:flex;justify-content:space-between;align-items:center;
+    flex-wrap:wrap;gap:10px;margin-bottom:8px;
+  }
+  .refresh-row .help{ margin:0; }
+  .wallet-note{
+    background:rgba(0,229,255,.06);border:1px dashed rgba(0,229,255,.4);
+    border-radius:8px;padding:12px 14px;margin-top:14px;font-size:12px;color:var(--ink-soft);
+  }
+  .wallet-note strong{ color:#00e5ff; }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <a class="brand" href="dashboard.html">PITCH<span class="accent">KING</span> ADMIN</a>
+  <div class="nav">
+    <a href="dashboard.html">Dashboard</a>
+    <a href="wallet.html" class="active">Wallet</a>
+    <a href="accounts.html">Raffle Accounts</a>
+    <a href="bets.html">Challenges</a>
+    <a href="settings.html">Settings</a>
+    <span id="adminUsername" style="color:var(--cyan);font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;"></span>
+    <button class="logout" id="logoutBtn">Log out</button>
+  </div>
+</header>
+
+<main class="container">
+  <h1 class="page-title">▸ Immortal Wallet</h1>
+  <div id="alertBox"></div>
+
+  <div class="refresh-row">
+    <p class="help">Every successful M-Pesa payment is recorded here forever. Amounts received can never vanish — not on redeploy, not on container restart, not on data-file wipes. Refreshes automatically every 15 seconds.</p>
+    <button class="btn small" id="refreshBtn">↻ Refresh now</button>
+  </div>
+
+  <div class="wallet-hero">
+    <div class="wallet-label">▸ Immortal Balance — Total Amount Received</div>
+    <div class="wallet-amount" id="walletTotal">KSh —</div>
+    <span class="wallet-tag" id="walletTag">Immortal ledger</span>
+    <div class="wallet-meta">
+      <span>Entries recorded: <strong id="walletCount">—</strong></span>
+      <span>First received: <strong id="walletFirst">—</strong></span>
+      <span>Last received: <strong id="walletLast">—</strong></span>
+    </div>
+  </div>
+
+  <div class="wallet-grid" id="walletBySource">
+    <p class="help">Loading breakdown…</p>
+  </div>
+
+  <div class="ledger-wrap">
+    <h2>▸ Ledger (newest first)</h2>
+    <div id="ledgerTableWrap"><p class="help">Loading ledger…</p></div>
+    <div class="wallet-note">
+      <strong>How it stays immortal:</strong> Every successful KCB callback appends a signed line to
+      <code>data/wallet-ledger.jsonl</code> and, when <code>PERSIST_DIR</code> is set, to a mirror plus a
+      second backup on the persistent disk. Duplicate M-Pesa receipts are ignored, so KCB retries never
+      inflate the total. Nothing in this app subtracts from the wallet.
+    </div>
+  </div>
+</main>
+
+<script src="js/admin.js"></script>
+<script>
+requireLogin();
+initHeader();
+
+function fmtDate(iso){
+  if(!iso) return "—";
+  try{
+    const d = new Date(iso);
+    return d.toLocaleString("en-GB",{year:"numeric",month:"short",day:"2-digit",hour:"2-digit",minute:"2-digit"});
+  }catch(_){ return iso; }
+}
+
+function escapeHtml(s){
+  return String(s == null ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+
+async function loadWallet(){
+  const alertBox = document.getElementById("alertBox");
+  try{
+    const d = await adminGet("/admin/wallet");
+    const s = d.summary || {};
+
+    document.getElementById("walletTotal").textContent = moneyKsh(s.total || 0);
+    document.getElementById("walletCount").textContent = (s.count || 0).toLocaleString();
+    document.getElementById("walletFirst").textContent = fmtDate(s.firstReceivedAt);
+    document.getElementById("walletLast").textContent  = fmtDate(s.lastReceivedAt);
+
+    const tag = document.getElementById("walletTag");
+    if(s.persistDirSet){
+      tag.textContent = "Persistent disk mirror: ACTIVE";
+      tag.classList.add("persist-on");
+    } else {
+      tag.textContent = "Immortal ledger — set PERSIST_DIR for cross-redeploy safety";
+    }
+
+    const bySource = s.bySource || {};
+    const grid = document.getElementById("walletBySource");
+    const keys = Object.keys(bySource);
+    if(!keys.length){
+      grid.innerHTML = `<div class="wallet-card"><div class="lbl">No payments yet</div><div class="val">KSh 0</div><div class="sub">The ledger is ready and waiting for the first successful M-Pesa receipt.</div></div>`;
+    } else {
+      grid.innerHTML = keys.sort().map(function(k){
+        const label = k.charAt(0).toUpperCase() + k.slice(1);
+        return `<div class="wallet-card">
+          <div class="lbl">▸ ${escapeHtml(label)}</div>
+          <div class="val">${moneyKsh(bySource[k] || 0)}</div>
+          <div class="sub">Received through the ${escapeHtml(k)} flow</div>
+        </div>`;
+      }).join("");
+    }
+
+    const entries = d.entries || [];
+    const wrap = document.getElementById("ledgerTableWrap");
+    if(!entries.length){
+      wrap.innerHTML = `<div class="ledger-empty">No ledger entries yet. Successful M-Pesa payments will appear here automatically.</div>`;
+    } else {
+      wrap.innerHTML = `
+        <div style="overflow-x:auto;">
+        <table class="ledger-table">
+          <thead>
+            <tr>
+              <th>Received</th>
+              <th>Source</th>
+              <th>Amount</th>
+              <th>M-Pesa receipt</th>
+              <th>Phone</th>
+              <th>Reference</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${entries.map(function(e){
+              return `<tr>
+                <td>${escapeHtml(fmtDate(e.receivedAt))}</td>
+                <td class="src">${escapeHtml(e.source || "—")}</td>
+                <td class="amt">${moneyKsh(e.amount || 0)}</td>
+                <td class="rcpt">${escapeHtml(e.mpesaReceipt || e.checkoutRequestId || "—")}</td>
+                <td>${escapeHtml(e.phone || "—")}</td>
+                <td>${escapeHtml(e.description || e.accountRef || "—")}</td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+        </div>
+      `;
+    }
+  }catch(err){
+    alertBox.innerHTML = `<div class="alert error">${escapeHtml(err.message || "Failed to load wallet")}</div>`;
+  }
+}
+
+document.getElementById("refreshBtn").addEventListener("click", loadWallet);
+loadWallet();
+setInterval(loadWallet, 15000);
+</script>
+</body>
+</html>

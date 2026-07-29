@@ -2,29 +2,48 @@ const express = require("express");
 const crypto = require("crypto");
 const multer = require("multer");
 const path = require("path");
+const fs = require("fs");
 const store = require("../lib/store");
 const { requireAdmin } = require("../lib/auth");
+const { rateLimit } = require("../lib/security");
 
 const router = express.Router();
+
+// ─── Hardened image upload ───────────────────────────────────
+// Same route, same field name, same 5MB limit — but now:
+//   • only image/* MIME types are accepted
+//   • filename is generated server-side (no user-controlled path)
+//   • extension whitelist enforced
+//   • at most 1 file per request
+const ALLOWED_EXT = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
+const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
 const upload = multer({
   storage: multer.diskStorage({
     destination: path.join(__dirname, "..", "uploads"),
     filename: (req, file, cb) => {
-      const ext = path.extname(file.originalname) || ".jpg";
-      cb(null, `${req.params.id}-${Date.now()}${ext}`);
+      const rawExt = (path.extname(file.originalname) || ".jpg").toLowerCase();
+      const ext = ALLOWED_EXT.has(rawExt) ? rawExt : ".jpg";
+      // Do not embed user-controlled req.params.id verbatim — hash it.
+      const safeId = crypto.createHash("sha1")
+        .update(String(req.params.id || "unknown"))
+        .digest("hex")
+        .slice(0, 12);
+      const rand = crypto.randomBytes(6).toString("hex");
+      cb(null, `${safeId}-${Date.now()}-${rand}${ext}`);
     },
   }),
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    if (!ALLOWED_MIME.has(String(file.mimetype).toLowerCase())) {
+      return cb(new Error("Only JPG/PNG/GIF/WEBP images are allowed."), false);
+    }
+    cb(null, true);
+  },
 });
 
-// ---------- PUBLIC ----------
+// ---------- helpers ----------
 
-// Compute the current countdown end timestamp for an account.
-// Priority:
-//   1) account.countdownEndsAt (explicit per-account override set from admin panel)
-//   2) account.createdAt + settings.raffleCountdownDays * 1 day
-//   3) fallback: now + 7 days
 function getCountdownEndsAt(a) {
   if (a.countdownEndsAt) return a.countdownEndsAt;
   const rows = store.readAll("settings");
@@ -35,24 +54,21 @@ function getCountdownEndsAt(a) {
   return new Date(base + days * 24 * 60 * 60 * 1000).toISOString();
 }
 
-// Normalise an Imgur URL. Accepts:
-//   https://imgur.com/AbCdEfG
-//   https://imgur.com/gallery/AbCdEfG
-//   https://i.imgur.com/AbCdEfG.jpg
-// Returns a direct-image URL (i.imgur.com/<id>.jpg) or null if it looks invalid.
+// Normalise an Imgur URL.  Returns a direct-image URL or null.
 function normaliseImgurUrl(raw) {
   if (!raw || typeof raw !== "string") return null;
   let url = raw.trim();
   if (!url) return null;
-  // Already a direct image URL from any host — accept as-is.
+  // Hard cap length (defensive).
+  if (url.length > 500) return null;
+  // Must be http/https, never javascript:/data:
+  if (!/^https?:\/\//i.test(url)) return null;
   if (/^https?:\/\/i\.imgur\.com\/[A-Za-z0-9]+\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(url)) {
     return url;
   }
-  // Any other direct http(s) image URL — accept as-is (defensive: users may paste other hosts).
   if (/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(url)) {
     return url;
   }
-  // Imgur page URL → convert to direct image URL (default to .jpg, Imgur serves the right type regardless).
   const m = url.match(/^https?:\/\/(?:www\.)?imgur\.com\/(?:gallery\/|a\/)?([A-Za-z0-9]{5,})/i);
   if (m) {
     return `https://i.imgur.com/${m[1]}.jpg`;
@@ -60,9 +76,24 @@ function normaliseImgurUrl(raw) {
   return null;
 }
 
-// List all raffle accounts customers can currently buy tickets for.
-// NOTE: ticketsSold is intentionally NOT exposed on the public feed —
-// the number of tickets already sold must stay private on the frontend.
+// Whitelist of characters allowed inside a raffle id (as posted by the
+// immortal-raffles client). Prevents anyone shoving a path or HTML into it.
+function safeId(v) {
+  const s = String(v || "").trim();
+  if (!s || s.length > 80) return null;
+  if (!/^[A-Za-z0-9._-]+$/.test(s)) return null;
+  return s;
+}
+
+function safeStr(v, max) {
+  if (v === undefined || v === null) return "";
+  const s = String(v);
+  if (s.length > max) return s.slice(0, max);
+  return s;
+}
+
+// ---------- PUBLIC ----------
+
 router.get("/accounts", (req, res) => {
   const accounts = store.readAll("accounts");
   const publicAccounts = accounts
@@ -75,35 +106,15 @@ router.get("/accounts", (req, res) => {
       image: a.image,
       imageUrl: a.imageUrl || null,
       features: a.features,
-      status: a.status, // "open" | "closed"
+      status: a.status,
       countdownEndsAt: getCountdownEndsAt(a),
       winnerTicket: a.status === "closed" ? a.winnerTicket : undefined,
       tournamentLink: a.tournamentLink || null,
-      // Revision counter — bumps on every admin edit. Frontend uses it to
-      // detect that a raffle has been changed on another device and
-      // overwrite its immortal local copy.
       rev: Number(a.rev) || 0,
     }));
   res.json(publicAccounts);
 });
 
-// ---------- AUTHORITY FEED ----------
-//
-// Public, cheap, cache-busting endpoint that returns the two pieces of
-// truth every browser needs to align its immortal-local copy with the
-// operator's latest state:
-//
-//   • tombstones — every raffle id the operator has ever DELETED from
-//                  ANY device. Persisted server-side so it survives
-//                  Render's ephemeral restarts (via store's persistence
-//                  layer). Once here, no browser is allowed to keep the
-//                  raffle in localStorage/IDB or push it back via
-//                  /accounts/rehydrate.
-//
-//   • revisions — { id: rev } for every current raffle. Browsers whose
-//                 local rev is older than server rev will overwrite
-//                 their local copy with the server's fields, so an edit
-//                 made on the creator's device appears on every device.
 router.get("/accounts/authority", (req, res) => {
   const tombstones = store.readAll("tombstones").map((t) => String(t.id));
   const revisions = {};
@@ -116,9 +127,10 @@ router.get("/accounts/authority", (req, res) => {
 });
 
 router.get("/accounts/:id", (req, res) => {
-  const a = store.findById("accounts", req.params.id);
+  const id = safeId(req.params.id);
+  if (!id) return res.status(400).json({ error: "Invalid id." });
+  const a = store.findById("accounts", id);
   if (!a) return res.status(404).json({ error: "Account not found" });
-  // Public detail: strip ticketsSold, add countdownEndsAt.
   const { ticketsSold, ...safe } = a;
   res.json({ ...safe, countdownEndsAt: getCountdownEndsAt(a) });
 });
@@ -129,62 +141,43 @@ router.get("/admin/accounts", requireAdmin, (req, res) => {
   res.json(store.readAll("accounts"));
 });
 
-// Additive endpoint: create-or-restore a raffle using a client-supplied id.
-//
-// Why: raffle opens are now created & persisted on the frontend
-// (localStorage) so they survive Render free-tier sleep/redeploys.
-// When a customer starts a payment, the frontend calls this endpoint to
-// make sure the backend also has a copy under the SAME id — otherwise
-// after a cold start the backend wouldn't know the raffle and ticket
-// issuing would fail. If a record with that id already exists, it's a
-// no-op (idempotent) — nothing about existing tickets is disturbed.
 // ---------- PUBLIC IMMORTAL-RAFFLE REHYDRATE ----------
-//
-// Same behaviour as /admin/accounts/rehydrate, but NO admin token required.
-// This is what makes raffles truly immortal for every visitor:
-//   • Every browser that has ever seen a raffle keeps a local copy
-//     (see frontend/js/immortal-raffles.js).
-//   • On page load, that browser silently POSTs its local raffles here.
-//   • The endpoint is STRICTLY idempotent: if a raffle with the given
-//     id already exists on the backend, nothing is touched. It can ONLY
-//     insert a missing record — never overwrite, modify, or delete.
-//   • Result: as soon as any device with a cached copy visits the site
-//     after Render's free-tier sleep/redeploy wipes the disk, the raffle
-//     list is repopulated for everyone else — without anyone touching
-//     the admin panel.
-//
-// This is safe because:
-//   • ticketsSold, winnerTicket, winnerEmail are ALWAYS reset to their
-//     public defaults (0 / null) on creation — clients cannot forge them.
-//   • Existing records are never mutated, so a malicious client cannot
-//     re-open a closed raffle or change its price.
+// Same idempotent contract as before.  Added: strict field validation,
+// length caps, and safe-id enforcement so nobody can inject arbitrary
+// blobs into the store even though the endpoint is public.
 function handleRehydrate(req, res) {
-  const { id, name, worth, ticketPrice, features, imageUrl, tournamentLink, countdownEndsAt, createdAt } = req.body || {};
-  if (!id || !name || !worth || !ticketPrice) {
+  const body = req.body || {};
+  const id = safeId(body.id);
+  if (!id) return res.status(400).json({ error: "id, name, worth and ticketPrice are required" });
+
+  const name = safeStr(body.name, 200).trim();
+  const worth = Number(body.worth);
+  const ticketPrice = Number(body.ticketPrice);
+  if (!name || !(worth > 0) || !(ticketPrice > 0)) {
     return res.status(400).json({ error: "id, name, worth and ticketPrice are required" });
   }
-  // If this id has been tombstoned by the operator on ANY device,
-  // never re-insert it — this is the fix that makes deletions propagate
-  // to every browser on the planet instead of only the creator's device.
+  if (worth > 100_000_000 || ticketPrice > 100_000) {
+    return res.status(400).json({ error: "worth or ticketPrice out of range" });
+  }
+
   const tombs = store.readAll("tombstones").map((t) => String(t.id));
   if (tombs.indexOf(String(id)) !== -1) {
     return res.status(410).json({ error: "This raffle was deleted by the operator." });
   }
   const existing = store.findById("accounts", id);
   if (existing) {
-    // Idempotent — keep whatever the backend already has, do NOT overwrite.
     return res.status(200).json(existing);
   }
   let imgUrlClean = null;
-  if (imageUrl !== undefined && imageUrl !== null && String(imageUrl).trim() !== "") {
-    imgUrlClean = normaliseImgurUrl(imageUrl);
+  if (body.imageUrl !== undefined && body.imageUrl !== null && String(body.imageUrl).trim() !== "") {
+    imgUrlClean = normaliseImgurUrl(body.imageUrl);
     if (!imgUrlClean) {
       return res.status(400).json({ error: "imageUrl must be a valid Imgur (or direct image) URL" });
     }
   }
   let ends = null;
-  if (countdownEndsAt) {
-    const d = new Date(countdownEndsAt);
+  if (body.countdownEndsAt) {
+    const d = new Date(body.countdownEndsAt);
     if (!isNaN(d.getTime())) ends = d.toISOString();
   }
   if (!ends) {
@@ -192,89 +185,52 @@ function handleRehydrate(req, res) {
     const days = Number(rows[0] && rows[0].raffleCountdownDays) > 0 ? Number(rows[0].raffleCountdownDays) : 7;
     ends = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
   }
+  // Sanitise features array — cap size and per-item length.
+  let features = [];
+  if (Array.isArray(body.features)) {
+    features = body.features.slice(0, 30).map((f) => safeStr(f, 200));
+  }
+  const tournamentLink = body.tournamentLink ? safeStr(body.tournamentLink, 500).trim() : null;
+
   const account = {
     id: String(id),
-    name: String(name),
-    worth: Number(worth),
-    ticketPrice: Number(ticketPrice),
-    features: Array.isArray(features) ? features : [],
+    name,
+    worth,
+    ticketPrice,
+    features,
     image: null,
     imageUrl: imgUrlClean,
     ticketsSold: 0,
     status: "open",
     winnerTicket: null,
     winnerEmail: null,
-    tournamentLink: (tournamentLink && String(tournamentLink).trim()) || null,
+    tournamentLink: tournamentLink || null,
     countdownEndsAt: ends,
-    createdAt: createdAt || new Date().toISOString(),
+    createdAt: body.createdAt || new Date().toISOString(),
     rev: 0,
   };
   store.insert("accounts", account);
   return res.status(201).json(account);
 }
 
-// Public rehydrate — used by every visiting browser to silently
-// re-seed a raffle the backend has forgotten. Idempotent + safe.
 router.post("/accounts/rehydrate", (req, res) => handleRehydrate(req, res));
 
-// Legacy admin rehydrate — kept for backward-compat with any older client.
-router.post("/admin/accounts/rehydrate", requireAdmin, (req, res) => {
-  const { id, name, worth, ticketPrice, features, imageUrl, tournamentLink, countdownEndsAt, createdAt } = req.body || {};
-  if (!id || !name || !worth || !ticketPrice) {
-    return res.status(400).json({ error: "id, name, worth and ticketPrice are required" });
-  }
-  const tombsAdm = store.readAll("tombstones").map((t) => String(t.id));
-  if (tombsAdm.indexOf(String(id)) !== -1) {
-    return res.status(410).json({ error: "This raffle was deleted by the operator." });
-  }
-  const existing = store.findById("accounts", id);
-  if (existing) {
-    // Idempotent — keep whatever the backend already has.
-    return res.status(200).json(existing);
-  }
-  let imgUrlClean = null;
-  if (imageUrl !== undefined && imageUrl !== null && String(imageUrl).trim() !== "") {
-    imgUrlClean = normaliseImgurUrl(imageUrl);
-    if (!imgUrlClean) {
-      return res.status(400).json({ error: "imageUrl must be a valid Imgur (or direct image) URL" });
-    }
-  }
-  let ends = null;
-  if (countdownEndsAt) {
-    const d = new Date(countdownEndsAt);
-    if (!isNaN(d.getTime())) ends = d.toISOString();
-  }
-  if (!ends) {
-    const rows = store.readAll("settings");
-    const days = Number(rows[0] && rows[0].raffleCountdownDays) > 0 ? Number(rows[0].raffleCountdownDays) : 7;
-    ends = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
-  }
-  const account = {
-    id: String(id),
-    name: String(name),
-    worth: Number(worth),
-    ticketPrice: Number(ticketPrice),
-    features: Array.isArray(features) ? features : [],
-    image: null,
-    imageUrl: imgUrlClean,
-    ticketsSold: 0,
-    status: "open",
-    winnerTicket: null,
-    winnerEmail: null,
-    tournamentLink: (tournamentLink && String(tournamentLink).trim()) || null,
-    countdownEndsAt: ends,
-    createdAt: createdAt || new Date().toISOString(),
-    rev: 0,
-  };
-  store.insert("accounts", account);
-  res.status(201).json(account);
-});
+router.post("/admin/accounts/rehydrate", requireAdmin, (req, res) => handleRehydrate(req, res));
 
 router.post("/admin/accounts", requireAdmin, (req, res) => {
-  const { name, worth, ticketPrice, features, imageUrl, tournamentLink } = req.body;
+  const { name, worth, ticketPrice, features, imageUrl, tournamentLink } = req.body || {};
   if (!name || !worth || !ticketPrice) {
     return res.status(400).json({ error: "name, worth and ticketPrice are required" });
   }
+  const nameSafe = safeStr(name, 200).trim();
+  const worthNum = Number(worth);
+  const priceNum = Number(ticketPrice);
+  if (!nameSafe || !(worthNum > 0) || !(priceNum > 0)) {
+    return res.status(400).json({ error: "name, worth and ticketPrice are required" });
+  }
+  if (worthNum > 100_000_000 || priceNum > 100_000) {
+    return res.status(400).json({ error: "worth or ticketPrice out of range" });
+  }
   let imgUrlClean = null;
   if (imageUrl !== undefined && imageUrl !== null && String(imageUrl).trim() !== "") {
     imgUrlClean = normaliseImgurUrl(imageUrl);
@@ -282,9 +238,6 @@ router.post("/admin/accounts", requireAdmin, (req, res) => {
       return res.status(400).json({ error: "imageUrl must be a valid Imgur (or direct image) URL" });
     }
   }
-  // Explicitly set countdownEndsAt at creation time so it is persisted as
-  // a fixed timestamp — it will NOT restart if the backend sleeps/restarts.
-  // The admin can still override it later from the edit panel.
   const settingsRows = store.readAll("settings");
   const countdownDays = Number(settingsRows[0] && settingsRows[0].raffleCountdownDays) > 0
     ? Number(settingsRows[0].raffleCountdownDays)
@@ -292,19 +245,22 @@ router.post("/admin/accounts", requireAdmin, (req, res) => {
   const createdAt = new Date().toISOString();
   const countdownEndsAt = new Date(Date.now() + countdownDays * 24 * 60 * 60 * 1000).toISOString();
 
+  let featuresSafe = [];
+  if (Array.isArray(features)) featuresSafe = features.slice(0, 30).map((f) => safeStr(f, 200));
+
   const account = {
     id: crypto.randomUUID(),
-    name,
-    worth: Number(worth),
-    ticketPrice: Number(ticketPrice),
-    features: Array.isArray(features) ? features : [],
+    name: nameSafe,
+    worth: worthNum,
+    ticketPrice: priceNum,
+    features: featuresSafe,
     image: null,
     imageUrl: imgUrlClean,
     ticketsSold: 0,
-    status: "open", // open | closed | archived
+    status: "open",
     winnerTicket: null,
     winnerEmail: null,
-    tournamentLink: tournamentLink || null,
+    tournamentLink: tournamentLink ? safeStr(tournamentLink, 500) : null,
     countdownEndsAt,
     createdAt,
     rev: 0,
@@ -313,15 +269,32 @@ router.post("/admin/accounts", requireAdmin, (req, res) => {
   res.status(201).json(account);
 });
 
-// Update name / worth / price / features / status / countdown / imageUrl.
 router.put("/admin/accounts/:id", requireAdmin, (req, res) => {
-  const { name, worth, ticketPrice, features, status, countdownEndsAt, countdownDaysFromNow, imageUrl, tournamentLink } = req.body;
+  const id = safeId(req.params.id);
+  if (!id) return res.status(400).json({ error: "Invalid id." });
+  const { name, worth, ticketPrice, features, status, countdownEndsAt, countdownDaysFromNow, imageUrl, tournamentLink } = req.body || {};
   const patch = {};
-  if (name !== undefined) patch.name = name;
-  if (worth !== undefined) patch.worth = Number(worth);
-  if (ticketPrice !== undefined) patch.ticketPrice = Number(ticketPrice);
-  if (features !== undefined) patch.features = features;
-  if (status !== undefined) patch.status = status;
+  if (name !== undefined) patch.name = safeStr(name, 200);
+  if (worth !== undefined) {
+    const w = Number(worth);
+    if (!(w >= 0) || w > 100_000_000) return res.status(400).json({ error: "worth out of range" });
+    patch.worth = w;
+  }
+  if (ticketPrice !== undefined) {
+    const p = Number(ticketPrice);
+    if (!(p >= 0) || p > 100_000) return res.status(400).json({ error: "ticketPrice out of range" });
+    patch.ticketPrice = p;
+  }
+  if (features !== undefined) {
+    if (!Array.isArray(features)) return res.status(400).json({ error: "features must be an array" });
+    patch.features = features.slice(0, 30).map((f) => safeStr(f, 200));
+  }
+  if (status !== undefined) {
+    if (!["open", "closed", "archived"].includes(String(status))) {
+      return res.status(400).json({ error: "invalid status" });
+    }
+    patch.status = status;
+  }
   if (countdownEndsAt !== undefined) {
     if (countdownEndsAt === null || countdownEndsAt === "") {
       patch.countdownEndsAt = null;
@@ -350,27 +323,19 @@ router.put("/admin/accounts/:id", requireAdmin, (req, res) => {
     if (tournamentLink === null || String(tournamentLink).trim() === "") {
       patch.tournamentLink = null;
     } else {
-      patch.tournamentLink = String(tournamentLink).trim();
+      patch.tournamentLink = safeStr(tournamentLink, 500).trim();
     }
   }
 
-  // Bump the revision counter so every browser knows to overwrite its
-  // immortal local copy with these new field values on next sync.
-  const cur = store.findById("accounts", req.params.id);
+  const cur = store.findById("accounts", id);
   patch.rev = (Number(cur && cur.rev) || 0) + 1;
 
-  const updated = store.update("accounts", req.params.id, patch);
+  const updated = store.update("accounts", id, patch);
   if (updated) return res.json(updated);
 
-  // The raffle was never mirrored to the backend yet (it lived only in
-  // the creator's immortal-local storage). Materialise a minimal row from
-  // the patch so the revision + fields can propagate to every other
-  // device via /accounts/authority. Anything the operator didn't supply
-  // is left null / empty; subsequent syncs from the creator's browser
-  // will enrich it. This is what makes tournament-link and other edits
-  // reach every user's phone even before a full rehydrate has happened.
+  // Materialise a minimal row (same behaviour as before).
   const materialised = {
-    id: String(req.params.id),
+    id: String(id),
     name: patch.name || "",
     worth: Number(patch.worth) || 0,
     ticketPrice: Number(patch.ticketPrice) || 0,
@@ -390,30 +355,47 @@ router.put("/admin/accounts/:id", requireAdmin, (req, res) => {
   res.json(materialised);
 });
 
-router.post("/admin/accounts/:id/image", requireAdmin, upload.single("image"), (req, res) => {
-  const account = store.findById("accounts", req.params.id);
-  if (!account) return res.status(404).json({ error: "Account not found" });
-  if (!req.file) return res.status(400).json({ error: "No image uploaded" });
+router.post("/admin/accounts/:id/image", requireAdmin, (req, res, next) => {
+  // Wrap multer so its errors become clean JSON (never leak internal messages).
+  upload.single("image")(req, res, function (err) {
+    if (err) {
+      const msg = err && err.message && err.message.length < 200 ? err.message : "Upload failed.";
+      return res.status(400).json({ error: msg });
+    }
+    const id = safeId(req.params.id);
+    if (!id) {
+      // Best-effort cleanup of a stray file.
+      if (req.file && req.file.path) { try { fs.unlinkSync(req.file.path); } catch (_) {} }
+      return res.status(400).json({ error: "Invalid id." });
+    }
+    const account = store.findById("accounts", id);
+    if (!account) {
+      if (req.file && req.file.path) { try { fs.unlinkSync(req.file.path); } catch (_) {} }
+      return res.status(404).json({ error: "Account not found" });
+    }
+    if (!req.file) return res.status(400).json({ error: "No image uploaded" });
 
-  const updated = store.update("accounts", req.params.id, {
-    image: `/uploads/${req.file.filename}`,
+    const updated = store.update("accounts", id, {
+      image: `/uploads/${req.file.filename}`,
+    });
+    res.json(updated);
   });
-  res.json(updated);
 });
 
-// Pick a random winning ticket from everyone who bought one, and close the
-// raffle. This is the "raffle draw".
 router.post("/admin/accounts/:id/draw", requireAdmin, (req, res) => {
-  const account = store.findById("accounts", req.params.id);
+  const id = safeId(req.params.id);
+  if (!id) return res.status(400).json({ error: "Invalid id." });
+  const account = store.findById("accounts", id);
   if (!account) return res.status(404).json({ error: "Account not found" });
   if (account.ticketsSold === 0) {
     return res.status(400).json({ error: "No tickets have been sold for this account yet" });
   }
 
   const tickets = store.readAll("tickets").filter((t) => t.accountId === account.id);
-  const winningTicket = tickets[Math.floor(Math.random() * tickets.length)];
+  // Cryptographically random pick.
+  const winningTicket = tickets[crypto.randomInt(0, tickets.length)];
 
-  const updated = store.update("accounts", req.params.id, {
+  const updated = store.update("accounts", id, {
     status: "closed",
     winnerTicket: winningTicket.ticketNumber,
     winnerEmail: winningTicket.buyerEmail,
@@ -423,15 +405,11 @@ router.post("/admin/accounts/:id/draw", requireAdmin, (req, res) => {
 });
 
 router.delete("/admin/accounts/:id", requireAdmin, (req, res) => {
-  const targetId = String(req.params.id);
+  const targetId = safeId(req.params.id);
+  if (!targetId) return res.status(400).json({ error: "Invalid id." });
   const all = store.readAll("accounts").filter((a) => a.id !== targetId);
   store.writeAll("accounts", all);
 
-  // Permanent server-side tombstone so no visitor's browser can push this
-  // raffle back via /accounts/rehydrate. This is what makes the delete
-  // apply on EVERY device, not only the creator's. Written EVEN IF the
-  // account row was never mirrored to the backend — the tombstone alone
-  // is enough to block every future rehydrate for this id.
   try {
     const tombs = store.readAll("tombstones");
     if (!tombs.some((t) => String(t.id) === targetId)) {

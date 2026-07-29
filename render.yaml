@@ -1,5 +1,8 @@
-# Render.com blueprint. Optional — you can also just create a Web Service
-# through the Render dashboard using the settings shown in DEPLOY.md.
+# Render.com blueprint.
+# NOTE: secrets are NOT stored here. Set them in the Render dashboard under
+# Environment → Environment Variables (they are then injected at runtime).
+# ADMIN_PASSWORD, CP_PASSWORD, and all KCB_* / SMTP_* values MUST be
+# configured that way — never committed to git.
 services:
   - type: web
     name: pitchkingbackend
@@ -7,10 +10,53 @@ services:
     plan: free
     buildCommand: npm install
     startCommand: node server.js
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: 20.11.1
+      - key: NODE_ENV
+        value: production
+      - key: PERSIST_DIR
+        value: /var/data
+      # The values below MUST be set in the Render dashboard as
+      # "sync: false" secrets. They are declared here for visibility only.
       - key: ADMIN_USERNAME
-        value: admin
+        sync: false
       - key: ADMIN_PASSWORD
-        value: 11hezron72
+        sync: false
+      - key: CP_PASSWORD
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: KCB_CONSUMER_KEY
+        sync: false
+      - key: KCB_CONSUMER_SECRET
+        sync: false
+      - key: KCB_SHORTCODE
+        sync: false
+      - key: KCB_TILL
+        sync: false
+      - key: KCB_PASSKEY
+        sync: false
+      - key: KCB_CALLBACK_URL
+        sync: false
+      - key: KCB_CALLBACK_SECRET
+        sync: false
+      - key: KCB_BASE_URL
+        sync: false
+      - key: KCB_TOKEN_ENDPOINT
+        sync: false
+      - key: KCB_STK_ENDPOINT
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM_NAME
+        sync: false
+    disk:
+      name: pitchking-data
+      mountPath: /var/data
+      sizeGB: 1

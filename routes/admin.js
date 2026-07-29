@@ -1,14 +1,38 @@
 const express = require("express");
 const store = require("../lib/store");
-const { login, requireAdmin } = require("../lib/auth");
+const wallet = require("../lib/wallet");
+const { login, requireAdmin, logout } = require("../lib/auth");
+const { rateLimit } = require("../lib/security");
 
 const router = express.Router();
 
-router.post("/admin/login", (req, res) => {
-  const { username, password } = req.body;
-  const token = login(username, password);
+// Tight per-IP throttle on login — 10 attempts / 5 minutes.
+// Preserves the same route path, same body shape, same responses.
+const loginLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 10,
+  bucket: "admin-login",
+  message: "Too many login attempts. Please wait a few minutes and try again.",
+});
+
+router.post("/admin/login", loginLimiter, async (req, res) => {
+  const { username, password } = req.body || {};
+  if (typeof username !== "string" || typeof password !== "string") {
+    return res.status(400).json({ error: "Username and password are required." });
+  }
+  if (username.length > 200 || password.length > 300) {
+    return res.status(400).json({ error: "Credentials too long." });
+  }
+  const token = await login(username, password, req);
   if (!token) return res.status(401).json({ error: "Incorrect username or password" });
   res.json({ token, username });
+});
+
+// Additive: explicit logout (existing clients that never call this
+// keep working unchanged — sessions still expire via TTL).
+router.post("/admin/logout", (req, res) => {
+  logout(req.headers["x-admin-token"]);
+  res.json({ ok: true });
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -60,6 +84,22 @@ router.get("/admin/dashboard", requireAdmin, (req, res) => {
     },
     platformEarned,
     grandTotal,
+    generatedAt: new Date().toISOString(),
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// IMMORTAL WALLET — append-only ledger of every successful M-Pesa
+// receipt. Money that arrived once stays counted forever, even after
+// redeploys, container restarts, or accidental data-file wipes.
+// Additive endpoints. No existing route/logic is modified.
+// ─────────────────────────────────────────────────────────────
+router.get("/admin/wallet", requireAdmin, (req, res) => {
+  const s = wallet.summary();
+  const limit = Math.min(Math.max(Number(req.query.limit) || 200, 1), 1000);
+  res.json({
+    summary: s,
+    entries: wallet.list(limit),
     generatedAt: new Date().toISOString(),
   });
 });
